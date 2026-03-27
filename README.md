@@ -16,8 +16,6 @@ Works in minimal containers such as
 [Chainguard static](https://images.chainguard.dev/directory/image/static/overview)
 where no shell or package manager is available.
 
----
-
 ## Background
 
 TLS certificate maximum lifetimes are shrinking — **200 days as of March 2026,
@@ -29,9 +27,7 @@ becomes mandatory for meaningful security benefit.
 infrastructure. The full story, including the CA/Browser Forum timeline,
 the key rotation challenge, and how HCL Domino CertMgr and HashiCorp Vault
 fit together, is in
-[docs/certificate-lifetime-reduction.md](docs/certificate-lifetime-reduction.md).
-
----
+[Certificate Lifetimes Are Shrinking — Is Your Domino Infrastructure Ready?](docs/certificate-lifetime-reduction.md).
 
 ## Context and Architecture
 
@@ -66,12 +62,6 @@ Vault (HashiCorp)
 **srvguard** is the last mile — a thin, dependency-free binary that bridges
 Vault to any process, in any container, on any platform.
 
-SSH key signing, dynamic database credentials, and other Vault use cases all
-plug into the same infrastructure without any changes to `srvguard` or
-CertMgr.
-
----
-
 ## How It Works
 
 ```
@@ -93,8 +83,6 @@ srvguard starts
 The managed service is started **after** secrets are in place and config is
 rendered — no race condition on startup. On secret rotation the service
 receives a configurable signal (default `SIGHUP`) to reload without downtime.
-
----
 
 ## Output Backends
 
@@ -118,8 +106,6 @@ revokes it** — it exists in kernel memory only, never on disk.
 
 Used for: native applications that can call `keyctl` directly, such as a
 Domino Extension Manager hook that reads the `server.id` password at startup.
-
----
 
 ## Configuration
 
@@ -211,8 +197,6 @@ If no command is given, `srvguard` runs in **secret-only mode** — it
 fetches and writes secrets but does not manage a process. Useful when paired
 with `SRVGUARD_RELOAD_CONTAINER` to signal a sibling container.
 
----
-
 ## Credential Files
 
 AppRole credentials are read from files, not environment variables, to avoid
@@ -229,8 +213,6 @@ exposure via `/proc/<pid>/environ`.
 Mount this directory read-only into the container. The only file that needs
 to be writable is the rendered config output (`SRVGUARD_TEMPLATE_DST`), which
 lives outside this directory.
-
----
 
 ## Deployment Modes
 
@@ -284,8 +266,6 @@ Host
 This is the most secure deployment — the container is completely isolated
 from Vault credentials.
 
----
-
 ## Usage Examples
 
 ### NGINX — direct process management
@@ -336,8 +316,6 @@ export SRVGUARD_RELOAD_CONTAINER=myservice
 
 srvguard
 ```
-
----
 
 ## C++ Consumer
 
@@ -399,8 +377,6 @@ make
 
 Produces `libsrvguard.a` for static linking into any native application.
 
----
-
 ## Building srvguard
 
 ### Development binary
@@ -412,8 +388,7 @@ go build -o srvguard .
 ### Production static binary
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags="-s -w" -o srvguard .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o srvguard .
 ```
 
 ### Container — test image (Wolfi runtime)
@@ -427,8 +402,6 @@ docker build --target test -t srvguard:test .
 ```bash
 docker build --target release -t srvguard:latest .
 ```
-
----
 
 ## Vault Secret Format
 
@@ -451,8 +424,6 @@ used by [nashcom-vault](https://github.com/nashcom/nashcom-vault) are:
 | Field | Content |
 |---|---|
 | `password` | The password value |
-
----
 
 ## Security Notes
 
