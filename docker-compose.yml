@@ -1,0 +1,65 @@
+# srvguard — NGINX use case model
+#
+# srvguard runs as a sidecar alongside NGINX.
+# It fetches TLS credentials from Vault and writes them to a shared tmpfs
+# volume. NGINX reads credentials from that volume and receives SIGHUP when
+# they are rotated.
+#
+# The Docker socket is mounted to allow srvguard to signal the NGINX
+# container. Scope is limited to signalling — no other API calls are made.
+#
+# For production, prefer running srvguard on the host and mounting the
+# tmpfs volume into the NGINX container — eliminates the need for Docker
+# socket access entirely.
+#
+# Build targets:
+#   test image:    docker build --target test    -t srvguard:test .
+#   release image: docker build --target release -t srvguard:latest .
+
+services:
+
+  srvguard:
+    build:
+      context: .
+      target: test             # change to release for production
+    container_name: srvguard
+    restart: on-failure
+    environment:
+      SRVGUARD_ADDR:          "https://vault.example.com:8200"
+      SRVGUARD_SECRET_PATH:   "secret/data/certs/nginx.example.com/tls"
+      SRVGUARD_OUTPUT_MODE:      "files"
+      SRVGUARD_OUTPUT_DIR:       "/run/srvguard/certs"
+      SRVGUARD_POLL_INTERVAL:    "5m"
+      SRVGUARD_RELOAD_CONTAINER: "nginx"
+      SRVGUARD_TEMPLATE_SRC:     "/etc/srvguard/nginx.conf.template"
+      SRVGUARD_TEMPLATE_DST:     "/etc/nginx/nginx.conf"
+      # variables substituted into the nginx.conf template
+      NGINX_SERVER_NAME:       "nginx.example.com"
+      NGINX_HTTP_PORT:         "80"
+      NGINX_HTTPS_PORT:        "443"
+    volumes:
+      - ./credentials:/etc/srvguard:ro   # role_id, secret_id, cacert.pem, nginx.conf.template
+      - certs:/run/srvguard/certs            # shared tmpfs with nginx
+      - nginx-config:/etc/nginx              # shared nginx config written by template processing
+      - /var/run/docker.sock:/var/run/docker.sock  # for SIGHUP to nginx
+    depends_on:
+      - nginx
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    restart: on-failure
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certs:/run/srvguard/certs:ro         # read-only — only srvguard writes here
+      - nginx-config:/etc/nginx:ro           # read-only — only srvguard writes here
+
+volumes:
+  certs:
+    driver_opts:
+      type:   tmpfs
+      device: tmpfs
+      o:      "size=16m,mode=0700"
+  nginx-config:

@@ -1,0 +1,25 @@
+# Go build artifacts
+bin/srvguard
+bin/srvguard-*
+bin/*.exe
+src/srvguard
+
+# C/C++ build artifacts
+*.o
+*.a
+consumers/cpp/example
+consumers/cpp/srvguard
+
+# Go test cache
+*.test
+*.out
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

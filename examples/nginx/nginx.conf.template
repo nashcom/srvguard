@@ -1,0 +1,50 @@
+# nginx.conf.template
+# Processed by srvguard at startup — ${VAR} placeholders are replaced
+# with environment variable values before NGINX is launched.
+#
+# Required environment variables:
+#   NGINX_SERVER_NAME   — server FQDN, e.g. nginx.example.com
+#   NGINX_HTTP_PORT     — HTTP listen port (default 80)
+#   NGINX_HTTPS_PORT    — HTTPS listen port (default 443)
+#   SRVGUARD_OUTPUT_DIR      — directory where srvguard writes cert files
+
+worker_processes auto;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+
+  sendfile    on;
+  keepalive_timeout 65;
+
+  # redirect HTTP to HTTPS
+  server {
+    listen      ${NGINX_HTTP_PORT:-80};
+    server_name ${NGINX_SERVER_NAME};
+    return 301  https://$host$request_uri;
+  }
+
+  server {
+    listen      ${NGINX_HTTPS_PORT:-443} ssl;
+    server_name ${NGINX_SERVER_NAME};
+
+    # TLS credentials written by srvguard into the shared tmpfs volume
+    ssl_certificate     ${SRVGUARD_OUTPUT_DIR}/server.crt;
+    ssl_certificate_key ${SRVGUARD_OUTPUT_DIR}/server.key;
+    ssl_password_file   ${SRVGUARD_OUTPUT_DIR}/ssl.password;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    location / {
+      root  /usr/share/nginx/html;
+      index index.html;
+    }
+  }
+}
