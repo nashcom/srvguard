@@ -27,12 +27,12 @@ jobs:
       - name: Build linux/amd64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags="-s -w" -C src -o ../bin/srvguard-linux-amd64 .
+            go build -C src -ldflags="-s -w" -o ../bin/srvguard-linux-amd64 .
 
       - name: Build linux/arm64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -ldflags="-s -w" -C src -o ../bin/srvguard-linux-arm64 .
+            go build -C src -ldflags="-s -w" -o ../bin/srvguard-linux-arm64 .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
