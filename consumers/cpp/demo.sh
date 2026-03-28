@@ -14,28 +14,37 @@
 #   - systemd v250+  with credential support
 #   - /var/lib/systemd/credential.secret  (created automatically if missing)
 #   - g++, make
-#   - srvguard binary  (export SRVGUARD_BIN= to override)
 #
 # Usage:
 #   ./demo.sh
 #   ./demo.sh --clean
-#   SRVGUARD_BIN=/path/to/srvguard ./demo.sh
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 UNIT_NAME="srvguard-keyring-demo"
 CRED_NAME="key_password"          # must match SrvGuardKeyringRead field in example.cpp
 CRED_FILE="/tmp/${CRED_NAME}"
-SRVGUARD_BIN="${SRVGUARD_BIN:-/bin/srvguard}"
-EXAMPLE_BIN="$(cd "$(dirname "$0")" && pwd)/example"
+EXAMPLE_BIN="${SCRIPT_DIR}/example"
 
 log()  { echo "  $*"; }
 info() { echo; echo "── $* ──"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
+# Locate srvguard: project bin/ → system /bin → PATH
+if [ -x "${SCRIPT_DIR}/../../bin/srvguard" ]; then
+    SRVGUARD_BIN="$(realpath "${SCRIPT_DIR}/../../bin/srvguard")"
+elif [ -x "/bin/srvguard" ]; then
+    SRVGUARD_BIN="$(realpath "/bin/srvguard")"
+elif command -v srvguard &>/dev/null; then
+    SRVGUARD_BIN="$(realpath "$(command -v srvguard)")"
+else
+    die "srvguard binary not found — run ./compile.sh -docker from the project root"
+fi
+
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
-if [[ "${1:-}" == "--clean" ]]; then
+if [ "${1:-}" = "--clean" ]; then
     systemctl is-active --quiet "${UNIT_NAME}.service" 2>/dev/null && \
         systemctl stop "${UNIT_NAME}.service" && log "stopped ${UNIT_NAME}.service"
     systemctl reset-failed "${UNIT_NAME}.service" 2>/dev/null || true
@@ -52,16 +61,16 @@ command -v g++           &>/dev/null || die "g++ not found — install build-ess
 command -v make          &>/dev/null || die "make not found — install build-essential"
 command -v systemd-creds &>/dev/null || die "systemd-creds not found (need systemd v250+)"
 command -v systemd-run   &>/dev/null || die "systemd-run not found"
-[[ -x "$SRVGUARD_BIN" ]]            || die "$SRVGUARD_BIN not found — export SRVGUARD_BIN="
+log "srvguard binary:  $SRVGUARD_BIN"
 
 SYSTEMD_VER=$(systemctl --version | awk 'NR==1{print $2}')
-[[ "$SYSTEMD_VER" -ge 250 ]]        || die "systemd v250+ required (have $SYSTEMD_VER)"
+[ "$SYSTEMD_VER" -ge 250 ]          || die "systemd v250+ required (have $SYSTEMD_VER)"
 log "systemd version: $SYSTEMD_VER"
 
 # Verify credential support and report which backend is active
 if systemd-creds has-tpm2 &>/dev/null; then
     log "credential backend: TPM2 (hardware-bound)"
-elif [[ -f /var/lib/systemd/credential.secret ]]; then
+elif [ -f /var/lib/systemd/credential.secret ]; then
     log "credential backend: credential.secret (machine-specific, no TPM2)"
 else
     log "no credential backend found — running systemd-creds setup ..."
@@ -91,7 +100,7 @@ echo -n "$TEST_SECRET" | \
 
 # Verify round-trip
 VERIFY=$(systemd-creds decrypt "$CRED_FILE" -)
-[[ "$VERIFY" == "$TEST_SECRET" ]] || die "credential verify failed"
+[ "$VERIFY" = "$TEST_SECRET" ] || die "credential verify failed"
 log "decrypt verified OK"
 unset TEST_SECRET VERIFY
 
