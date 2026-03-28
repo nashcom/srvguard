@@ -4,70 +4,88 @@
 for [HashiCorp Vault](https://www.vaultproject.io/)-integrated workloads.
 
 `srvguard` solves a fundamental bootstrap problem: a service needs its
-secrets (TLS certificate, private key, password) before it can start, but the
-secrets live in Vault which requires authentication to access. The guard
-authenticates to Vault, fetches the secrets, delivers them to the configured
-output backend, processes any config templates, starts the managed service,
-and then continues to watch for secret rotations — signalling the service to
-reload when they change.
+secrets (TLS certificate, private key, password) before it can start, but
+those secrets live in a protected store that requires authentication to access.
+The guard authenticates using the platform's native identity mechanism,
+fetches the secrets, delivers them to the configured output backend, processes
+any config templates, starts the managed service, and then continues to watch
+for secret rotations — signalling the service to reload when they change.
+
+Vault is the default secret store, but srvguard also works with systemd
+credentials directly — no Vault required.
 
 Designed to run as a statically compiled binary with no external dependencies.
 Works in minimal containers such as
 [Chainguard static](https://images.chainguard.dev/directory/image/static/overview)
 where no shell or package manager is available.
 
-## Background
+## The Challenge in 2026
 
-TLS certificate maximum lifetimes are shrinking — **200 days as of March 2026,
-47 days by 2029**. At that frequency, manual certificate management breaks down.
-Automation is no longer optional, and key rotation on every renewal cycle
-becomes mandatory for meaningful security benefit.
+Two independent pressures are making manual secret management unsustainable.
 
-`srvguard` is part of the answer to that problem for Domino and NGINX
-infrastructure. The full story, including the CA/Browser Forum timeline,
-the key rotation challenge, and how HCL Domino CertMgr and HashiCorp Vault
-fit together, is in
+**Certificate lifetimes are shrinking.** TLS certificate maximum lifetimes
+dropped to 200 days in March 2026 and will reach 47 days by 2029. At that
+renewal frequency, certificates need to be rotated roughly every six weeks —
+and the private key with them. Manual processes that worked for two-year
+certificates simply break down. Automation is no longer optional.
+
+**Application secrets have no expiry model at all.** Domino `server.id`
+passwords, API keys, database credentials, and signing keys sit in files,
+scripts, and administrator memory. They are copied during deployments, stored
+in backups, and rarely rotated. Every copy is a long-lived liability with no
+built-in expiry and no audit trail.
+
+`srvguard` can be part of the answer. It delivers any secret — TLS certificate,
+private key, `server.id` password — from a protected source to the process
+that needs it, using only what the platform already provides for trust. The full context
+on certificate lifetimes and the Domino ecosystem is in
 [Certificate Lifetimes Are Shrinking — Is Your Domino Infrastructure Ready?](docs/certificate-lifetime-reduction.md).
 
 ## Context and Architecture
 
-`srvguard` is part of a larger certificate lifecycle and secret distribution
-platform built around [HashiCorp Vault](https://www.vaultproject.io/) as the
-central distribution point.
+`srvguard` is designed to fit into a larger certificate lifecycle and secret
+distribution platform. One well-tested combination is
+[HashiCorp Vault](https://www.vaultproject.io/) as the central secret store
+together with
+[HCL Domino CertMgr](https://help.hcl-software.com/domino/14.5.1/admin/secu_certmgr_overview.html)
+as the certificate lifecycle component. CertMgr supports ACME flows with
+public and commercial CAs (Let's Encrypt, DigiCert, Sectigo, Actalis and
+others), handles key generation and rollover, and automates renewal. It can
+push issued certificates and keys into Vault, from where `srvguard` delivers
+them to whatever process needs them.
 
-[HCL Domino CertMgr](https://help.hcl-software.com/domino/14.0.0/admin/secu_certmgr_overview.html)
-acts as the authoritative source for certificate lifecycle management —
-handling ACME flows with public and commercial CAs (Let's Encrypt, DigiCert,
-Sectigo, Actalis and others), key generation and rollover, and renewal
-automation. Once a certificate is issued or renewed, CertMgr pushes it into
-Vault. From there, `srvguard` handles the last mile: delivering secrets
-securely to whatever process needs them.
+Other combinations work too — Vault's own PKI engine, an external ACME client
+like `acme.sh`, or a plain file drop from any provisioning tool. `srvguard`
+does not require any specific upstream.
 
-```
-CertMgr (HCL Domino)
-  ├── manages cert lifecycle (ACME, Let's Encrypt, DigiCert, Sectigo ...)
-  ├── pushes certificates and keys → Vault  (central distribution)
-  └── pushes to K8s Secrets                 (containerized workloads)
+**CertMgr** is purpose-built for certificate lifecycle management and CA interaction.
 
-Vault (HashiCorp)
-  ├── srvguard ──────────────────────────→  NGINX, any service (files backend)
-  ├── srvguard ──────────────────────────→  Domino EM hook    (kernel keyring)
-  ├── Vault Agent ────────────────────────→  legacy systems
-  ├── Vault PKI + ACME ───────────────────→  internal CAs (no CertMgr needed)
-  └── SSH signing, dynamic secrets, ...     (other Vault use cases)
-```
+| CertMgr capability          | Notes                                                |
+|-----------------------------|------------------------------------------------------|
+| ACME certificate lifecycle  | Let's Encrypt, DigiCert, Sectigo, Actalis and others |
+| Key generation and rollover | Private key never leaves the Domino server           |
+| Push cert + key → Vault     | Central distribution for non-Domino consumers        |
+| Push → Kubernetes Secrets   | Containerised workloads                              |
 
-**CertMgr** stays the expert on certificates and CA interaction.
-**Vault** stays the expert on secret storage and distribution policy.
+**Vault** is purpose-built for secret storage, access policy, and audit.
+
+| Vault distribution path      | Consumer                 | Notes                                   |
+|------------------------------|--------------------------|------------------------------------------|
+| srvguard → files backend     | NGINX, any service       | TLS cert + key on tmpfs                  |
+| srvguard → kernel keyring    | Domino Extension Manager | `server.id` password, never on disk      |
+| Vault Agent                  | Legacy systems           | Vault-native agent for other workloads   |
+| Vault PKI + ACME             | Internal CAs             | No CertMgr needed for internal issuance  |
+| SSH signing, dynamic secrets | Any                      | Other standard Vault use cases           |
+
 **srvguard** is the last mile — a thin, dependency-free binary that bridges
-Vault to any process, in any container, on any platform.
+the secret store to any process, in any container, on any platform.
 
 ## How It Works
 
 ```
 srvguard starts
   │
-  ├── 1. Authenticate to Vault via AppRole
+  ├── 1. Authenticate to Vault (file / systemd / k8s / cert)
   ├── 2. Fetch secret from KV v2
   ├── 3. Write secret to output backend (files or kernel keyring)
   ├── 4. Process config template: nginx.conf.template → nginx.conf
@@ -84,28 +102,94 @@ The managed service is started **after** secrets are in place and config is
 rendered — no race condition on startup. On secret rotation the service
 receives a configurable signal (default `SIGHUP`) to reload without downtime.
 
+## Authentication Methods
+
+`srvguard` supports three authentication paths. Select with
+`SRVGUARD_AUTH_METHOD` (default: `file`).
+
+| Method    | Identity source                       | When to use                        |
+|-----------|---------------------------------------|------------------------------------|
+| `file`    | `role_id` + `secret_id` files on disk | Default — containers, any platform |
+| `systemd` | `$CREDENTIALS_DIRECTORY/<cred>`       | VMs with systemd v250+             |
+| `k8s`     | Kubernetes service account JWT        | Pods running in Kubernetes         |
+| `cert`    | Machine-encrypted PKI client cert     | VMs/bare metal without systemd     |
+
+> `approle` is accepted as an alias for `file`.
+
+### File credentials (default)
+
+Reads `role_id` and `secret_id` from files at the paths configured by
+`SRVGUARD_ROLE_ID_FILE` and `SRVGUARD_SECRET_ID_FILE`. No additional
+configuration required. The files are typically placed on a tmpfs bind-mount
+by the host or orchestrator.
+
+### mTLS cert auth
+
+On first start, reads a one-time Vault response-wrapping token from
+`SRVGUARD_WRAP_TOKEN_FILE`, calls `/v1/sys/wrapping/unwrap` to retrieve a
+PKI-issued client certificate and key, encrypts the bundle with a key derived
+from `/etc/machine-id`, and persists it to `SRVGUARD_CLIENT_ENC_FILE`. On
+subsequent starts the bundle is decrypted directly — no wrap token needed.
+
+Set `SRVGUARD_AUTH_METHOD=cert`. See [Secret Distribution Across Platforms — VM, Container, and Kubernetes](docs/architecture.md)
+for the full auth model including the mTLS bootstrap flow.
+
+### Kubernetes service account (k8s)
+
+Reads the Pod's service account JWT from `SRVGUARD_K8S_TOKEN_FILE` (standard
+Kubernetes mount path by default) and authenticates to Vault's Kubernetes auth
+method. The JWT is issued and rotated by the kubelet — no credential files or
+operator bootstrap per Pod.
+
+Set `SRVGUARD_AUTH_METHOD=k8s` and `SRVGUARD_K8S_ROLE=<role>`. The Vault-side
+setup (one time per cluster) is in the nsh-vault-deploy provisioner.
+
+### systemd credential auth
+
+Reads a pre-issued Vault token from
+`$CREDENTIALS_DIRECTORY/$SRVGUARD_SYSTEMD_CRED` (default credential name:
+`vault-token`). systemd decrypts the credential using TPM2 or a machine-bound
+key before the service starts — no crypto in srvguard is required for this
+path.
+
+Set `SRVGUARD_AUTH_METHOD=systemd`. Example unit snippet:
+
+```ini
+[Service]
+LoadCredentialEncrypted=vault-token:/etc/srvguard/vault-token.cred
+Environment=SRVGUARD_AUTH_METHOD=systemd
+```
+
+See [systemd Credentials](docs/systemd-credentials.md) for background
+on how systemd credentials work and security properties.
+
+---
+
 ## Output Backends
 
 ### files
 Writes secrets as individual files to a directory (typically a `tmpfs` mount
 so they never touch persistent storage):
 
-| File | Content |
-|---|---|
-| `server.crt` | Certificate chain (`chain` field) |
-| `server.key` | Encrypted private key (`encrypted_key` field) |
-| `ssl.password` | Key password (`key_password` field) |
+| File           | Content                                       |
+|----------------|-----------------------------------------------|
+| `server.crt`   | Certificate chain (`chain` field)             |
+| `server.key`   | Encrypted private key (`encrypted_key` field) |
+| `ssl.password` | Key password (`key_password` field)           |
 
 Used for: NGINX, Apache, any service that reads credentials from files.
 
 ### keyring
-Stores the full secret payload as JSON in the
-[Linux kernel session keyring](https://www.man7.org/linux/man-pages/man7/keyrings.7.html)
+Stores the full secret payload as JSON in the Linux kernel session keyring
 under a named label. The consumer process reads the key and **immediately
 revokes it** — it exists in kernel memory only, never on disk.
 
 Used for: native applications that can call `keyctl` directly, such as a
 Domino Extension Manager hook that reads the `server.id` password at startup.
+
+See [Linux Kernel Keyring](docs/linux-kernel-keyring.md) for background
+on the kernel keyring facility, security properties, and the read-once-revoke
+pattern.
 
 ## Configuration
 
@@ -113,23 +197,23 @@ All configuration is via environment variables prefixed `SRVGUARD_`.
 
 ### Vault Connection
 
-| Variable | Default | Description |
-|---|---|---|
-| `SRVGUARD_ADDR` | `https://127.0.0.1:8200` | Vault server URL |
-| `SRVGUARD_ROLE_ID_FILE` | `/etc/srvguard/role_id` | Path to file containing AppRole `role_id` |
-| `SRVGUARD_SECRET_ID_FILE` | `/etc/srvguard/secret_id` | Path to file containing AppRole `secret_id` |
-| `SRVGUARD_CACERT` | `/etc/srvguard/cacert.pem` | CA certificate for Vault TLS verification |
+| Variable                  | Default                    | Description                               |
+|---------------------------|----------------------------|-------------------------------------------|
+| `SRVGUARD_ADDR`           | `https://127.0.0.1:8200`   | Vault server URL                          |
+| `SRVGUARD_ROLE_ID_FILE`   | `/etc/srvguard/role_id`    | Path to `role_id` file (file auth mode)   |
+| `SRVGUARD_SECRET_ID_FILE` | `/etc/srvguard/secret_id`  | Path to `secret_id` file (file auth mode) |
+| `SRVGUARD_CACERT`         | `/etc/srvguard/cacert.pem` | CA certificate for Vault TLS verification |
 
 ### Secret Path
 
 The KV v2 secret path follows the convention `{mount}/data/certs/{fqdn}/{type}`
 and is built automatically from three variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `SRVGUARD_SECRET_MOUNT` | `secret` | KV v2 mount point |
-| `SRVGUARD_SECRET_FQDN` | *(system hostname)* | Server FQDN — the primary identifier for the secret |
-| `SRVGUARD_SECRET_TYPE` | `tls` | Secret type: `tls`, `rsa`, or `ecdsa` |
+| Variable                | Default             | Description                                         |
+|-------------------------|---------------------|-----------------------------------------------------|
+| `SRVGUARD_SECRET_MOUNT` | `secret`            | KV v2 mount point                                   |
+| `SRVGUARD_SECRET_FQDN`  | *(system hostname)* | Server FQDN — the primary identifier for the secret |
+| `SRVGUARD_SECRET_TYPE`  | `tls`               | Secret type: `tls`, `rsa`, or `ecdsa`               |
 
 For example, with `SRVGUARD_SECRET_FQDN=myserver.example.com` and
 `SRVGUARD_SECRET_TYPE=rsa` the resolved path is:
@@ -141,8 +225,8 @@ secret/data/certs/myserver.example.com/rsa
 Use `SRVGUARD_SECRET_PATH` to override the full path directly when the
 standard convention does not apply:
 
-| Variable | Default | Description |
-|---|---|---|
+| Variable               | Default   | Description                                              |
+|------------------------|-----------|----------------------------------------------------------|
 | `SRVGUARD_SECRET_PATH` | *(unset)* | Full KV v2 path override — takes priority over the above |
 
 > **Container note:** set `hostname: myserver.example.com` in
@@ -151,11 +235,11 @@ standard convention does not apply:
 
 ### Output
 
-| Variable | Default | Description |
-|---|---|---|
-| `SRVGUARD_OUTPUT_MODE` | `files` | Output backend: `files` or `keyring` |
-| `SRVGUARD_OUTPUT_DIR` | `/run/srvguard/certs` | Directory for the `files` backend |
-| `SRVGUARD_KEYRING_LABEL` | `srvguard` | Key label for the `keyring` backend |
+| Variable                 | Default               | Description                          |
+|--------------------------|-----------------------|--------------------------------------|
+| `SRVGUARD_OUTPUT_MODE`   | `files`               | Output backend: `files` or `keyring` |
+| `SRVGUARD_OUTPUT_DIR`    | `/run/srvguard/certs` | Directory for the `files` backend    |
+| `SRVGUARD_KEYRING_LABEL` | `srvguard`            | Key label for the `keyring` backend  |
 
 ### Config Template Processing
 
@@ -164,10 +248,10 @@ managed service, replacing `${VAR}` and `$VAR` placeholders with environment
 variable values. This removes the need for the `envsubst` binary or a shell
 in minimal containers.
 
-| Variable | Default | Description |
-|---|---|---|
+| Variable                | Default   | Description                                                          |
+|-------------------------|-----------|----------------------------------------------------------------------|
 | `SRVGUARD_TEMPLATE_SRC` | *(unset)* | Path to the template file, e.g. `/etc/srvguard/nginx.conf.template` |
-| `SRVGUARD_TEMPLATE_DST` | *(unset)* | Path to write the rendered config, e.g. `/etc/nginx/nginx.conf` |
+| `SRVGUARD_TEMPLATE_DST` | *(unset)* | Path to write the rendered config, e.g. `/etc/nginx/nginx.conf`     |
 
 Template processing is skipped if either variable is not set.
 
@@ -182,10 +266,10 @@ See `examples/nginx/nginx.conf.template` for a complete example.
 
 ### Process Supervision
 
-| Variable | Default | Description |
-|---|---|---|
-| `SRVGUARD_POLL_INTERVAL` | `60s` | How often to check for secret version changes. Accepts Go duration strings: `30s`, `5m`, `1h` |
-| `SRVGUARD_RELOAD_CONTAINER` | *(unset)* | Docker container name to signal on secret rotation (sidecar mode) |
+| Variable                    | Default   | Description                                                                                   |
+|-----------------------------|-----------|-----------------------------------------------------------------------------------------------|
+| `SRVGUARD_POLL_INTERVAL`    | `60s`     | How often to check for secret version changes. Accepts Go duration strings: `30s`, `5m`, `1h` |
+| `SRVGUARD_RELOAD_CONTAINER` | *(unset)* | Docker container name to signal on secret rotation (sidecar mode)                             |
 
 The managed service command is passed after `--` on the command line:
 
@@ -199,13 +283,13 @@ with `SRVGUARD_RELOAD_CONTAINER` to signal a sibling container.
 
 ## Credential Files
 
-AppRole credentials are read from files, not environment variables, to avoid
+Credentials are read from files, not environment variables, to avoid
 exposure via `/proc/<pid>/environ`.
 
 ```
 /etc/srvguard/
-  role_id                  — AppRole role_id            (mode 0644)
-  secret_id                — AppRole secret_id          (mode 0600)
+  role_id                  — file auth: role_id         (mode 0644)
+  secret_id                — file auth: secret_id       (mode 0600)
   cacert.pem               — CA certificate for Vault TLS
   nginx.conf.template      — optional config template
 ```
@@ -411,27 +495,35 @@ used by [nashcom-vault](https://github.com/nashcom/nashcom-vault) are:
 
 **TLS credentials:**
 
-| Field | Content |
-|---|---|
-| `chain` | PEM certificate chain (leaf + intermediates) |
-| `encrypted_key` | PEM private key, encrypted with `key_password` |
-| `key_password` | Password protecting the private key |
-| `cn` | Common name (informational) |
-| `not_after` | Certificate expiry date used to schedule renewal |
+| Field           | Content                                          |
+|-----------------|--------------------------------------------------|
+| `chain`         | PEM certificate chain (leaf + intermediates)     |
+| `encrypted_key` | PEM private key, encrypted with `key_password`   |
+| `key_password`  | Password protecting the private key              |
+| `cn`            | Common name (informational)                      |
+| `not_after`     | Certificate expiry date used to schedule renewal |
 
 **Simple password (e.g. Domino server.id):**
 
-| Field | Content |
-|---|---|
+| Field      | Content            |
+|------------|--------------------|
 | `password` | The password value |
 
 ## Security Notes
 
-- **AppRole credentials** are read from files at `/etc/srvguard/`, not
-  from environment variables, to prevent exposure via `/proc/<pid>/environ`.
+- **File credentials** (`role_id`, `secret_id`) are read from files at
+  `/etc/srvguard/`, not from environment variables, to prevent exposure
+  via `/proc/<pid>/environ`.
 - **Kernel keyring** backend stores secrets in the Linux session keyring.
   Keys are revoked on first read and exist only in kernel memory — never
   on disk or in the filesystem.
+  → [Linux Kernel Keyring](docs/linux-kernel-keyring.md)
+- **systemd credentials** are decrypted by the service manager using TPM2 or
+  a machine-bound key before srvguard starts. The plaintext lives in
+  `$CREDENTIALS_DIRECTORY` on a tmpfs and is inaccessible to other services.
+  → [systemd Credentials](docs/systemd-credentials.md)
+- **mTLS client cert** bundle is encrypted with a key derived from
+  `/etc/machine-id` (HKDF-SHA256 + AES-256-GCM). Useless on any other machine.
 - **Files backend** should always target a `tmpfs` mount. The provided
   `docker-compose.yml` configures the shared `certs` volume as tmpfs.
 - **Config templates** are rendered to the destination path with mode `0644`.
@@ -444,3 +536,6 @@ used by [nashcom-vault](https://github.com/nashcom/nashcom-vault) are:
 - **Sidecar Docker socket** access is required only for Mode 2. In Mode 3
   (host process) the socket stays on the host. In Mode 1 (direct child)
   no socket access is needed at all.
+
+See [Secret Distribution Across Platforms](docs/architecture.md) for the full
+runtime identity model covering VMs, containers, and Kubernetes.

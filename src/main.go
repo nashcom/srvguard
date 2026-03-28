@@ -63,6 +63,15 @@ type Config struct {
   TemplateSrc  string // path to config template (e.g. nginx.conf.template)
   TemplateDst  string // path to write processed config (e.g. /etc/nginx/nginx.conf)
 
+  // Authentication method
+  AuthMethod     string // "file" (default), "cert" (mTLS), "systemd" or "k8s"
+  ClientEncFile  string // path to machine-encrypted client cert bundle (cert auth)
+  WrapTokenFile  string // path to one-time Vault wrap token (cert auth bootstrap)
+  SystemdCred    string // systemd credential name holding the Vault token (systemd auth)
+  K8sTokenFile   string // path to Kubernetes service account JWT (k8s auth)
+  K8sRole        string // Vault role name for Kubernetes auth
+  K8sAuthMount   string // Vault Kubernetes auth mount path (default: kubernetes)
+
   // Process supervision
   Command          []string       // child process command + args
   ReloadSignal     syscall.Signal // signal to send on secret rotation (default SIGHUP)
@@ -75,6 +84,13 @@ type Config struct {
 func loadConfig() (*Config, error) {
   cfg := &Config{
     VaultAddr:       envOrDefault("SRVGUARD_ADDR",             "https://127.0.0.1:8200"),
+    AuthMethod:      envOrDefault("SRVGUARD_AUTH_METHOD",      "file"),
+    ClientEncFile:   envOrDefault("SRVGUARD_CLIENT_ENC_FILE",  "/etc/srvguard/client.enc"),
+    WrapTokenFile:   envOrDefault("SRVGUARD_WRAP_TOKEN_FILE",  "/etc/srvguard/wrap-token"),
+    SystemdCred:     envOrDefault("SRVGUARD_SYSTEMD_CRED",     "vault-token"),
+    K8sTokenFile:    envOrDefault("SRVGUARD_K8S_TOKEN_FILE",   "/var/run/secrets/kubernetes.io/serviceaccount/token"),
+    K8sRole:         os.Getenv("SRVGUARD_K8S_ROLE"),
+    K8sAuthMount:    envOrDefault("SRVGUARD_K8S_AUTH_MOUNT",   "kubernetes"),
     RoleIDFile:      envOrDefault("SRVGUARD_ROLE_ID_FILE",     "/etc/srvguard/role_id"),
     SecretIDFile:    envOrDefault("SRVGUARD_SECRET_ID_FILE",   "/etc/srvguard/secret_id"),
     CACertFile:      envOrDefault("SRVGUARD_CACERT",           "/etc/srvguard/cacert.pem"),
@@ -119,6 +135,8 @@ type vaultClient struct {
 }
 
 // newVaultClient creates an HTTP client with the configured CA certificate.
+// When AuthMethod is "cert" the client certificate bundle is loaded (or
+// bootstrapped via the wrap token) and attached for mTLS.
 func newVaultClient(cfg *Config) (*vaultClient, error) {
   pool := x509.NewCertPool()
 
@@ -132,8 +150,18 @@ func newVaultClient(cfg *Config) (*vaultClient, error) {
     }
   }
 
+  tlsCfg := &tls.Config{RootCAs: pool}
+
+  if cfg.AuthMethod == "cert" {
+    clientCert, err := loadClientCert(cfg, pool)
+    if err != nil {
+      return nil, fmt.Errorf("loading mTLS client cert: %w", err)
+    }
+    tlsCfg.Certificates = []tls.Certificate{clientCert}
+  }
+
   transport := &http.Transport{
-    TLSClientConfig: &tls.Config{RootCAs: pool},
+    TLSClientConfig: tlsCfg,
   }
 
   return &vaultClient{
@@ -145,8 +173,51 @@ func newVaultClient(cfg *Config) (*vaultClient, error) {
   }, nil
 }
 
-// login performs an AppRole login and stores the resulting token.
+// login dispatches to the appropriate authentication method.
 func (c *vaultClient) login(cfg *Config) error {
+  switch cfg.AuthMethod {
+  case "cert":
+    return c.loginCert()
+  case "systemd":
+    return c.loginSystemd(cfg)
+  case "k8s":
+    return c.loginK8s(cfg)
+  default: // "file", "approle" (alias), or unset
+    return c.loginAppRole(cfg)
+  }
+}
+
+// loginCert authenticates using the mTLS client certificate already loaded
+// in the HTTP transport.  The cert auth role is always "srvguard".
+func (c *vaultClient) loginCert() error {
+  body, _ := json.Marshal(map[string]string{"name": "srvguard"})
+
+  resp, err := c.post("/v1/auth/cert/login", "", body)
+  if err != nil {
+    return fmt.Errorf("cert login: %w", err)
+  }
+  defer resp.Body.Close()
+
+  var result struct {
+    Auth struct {
+      ClientToken string `json:"client_token"`
+    } `json:"auth"`
+  }
+
+  if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+    return fmt.Errorf("decoding cert login response: %w", err)
+  }
+
+  if result.Auth.ClientToken == "" {
+    return fmt.Errorf("vault cert login returned empty token")
+  }
+
+  c.token = result.Auth.ClientToken
+  return nil
+}
+
+// loginAppRole performs an AppRole login and stores the resulting token.
+func (c *vaultClient) loginAppRole(cfg *Config) error {
   roleID, err := readFile(cfg.RoleIDFile)
   if err != nil {
     return fmt.Errorf("reading role_id: %w", err)
@@ -349,6 +420,13 @@ type varDef struct {
 // varDefs is the single source of truth for all SRVGUARD_ variables.
 var varDefs = []varDef{
   {"SRVGUARD_ADDR",             "https://127.0.0.1:8200",   "Vault server URL  e.g. https://vault.example.com:8200"},
+  {"SRVGUARD_AUTH_METHOD",      "file",                     "Auth method: file (default), cert (mTLS), systemd, k8s"},
+  {"SRVGUARD_CLIENT_ENC_FILE",  "/etc/srvguard/client.enc", "Machine-encrypted mTLS client cert bundle (cert auth)"},
+  {"SRVGUARD_WRAP_TOKEN_FILE",  "/etc/srvguard/wrap-token", "One-time Vault wrap token for first-time cert bootstrap"},
+  {"SRVGUARD_SYSTEMD_CRED",     "vault-token",              "systemd credential name holding Vault token (systemd auth)"},
+  {"SRVGUARD_K8S_TOKEN_FILE",   "/var/run/secrets/kubernetes.io/serviceaccount/token", "K8s service account JWT path (k8s auth)"},
+  {"SRVGUARD_K8S_ROLE",         "",                         "Vault role name for Kubernetes auth (required for k8s auth)"},
+  {"SRVGUARD_K8S_AUTH_MOUNT",   "kubernetes",               "Vault Kubernetes auth mount path (k8s auth)"},
   {"SRVGUARD_ROLE_ID_FILE",     "/etc/srvguard/role_id",    "AppRole role_id file  e.g. /etc/srvguard/role_id"},
   {"SRVGUARD_SECRET_ID_FILE",   "/etc/srvguard/secret_id",  "AppRole secret_id file  e.g. /etc/srvguard/secret_id"},
   {"SRVGUARD_CACERT",           "/etc/srvguard/cacert.pem", "CA cert for Vault TLS  e.g. /etc/srvguard/cacert.pem"},
@@ -382,6 +460,16 @@ func printVersion() {
   printBanner()
 }
 
+// truncCol truncates a string to n runes, appending "…" if it was longer.
+// Keeps the help table columns aligned even when values exceed the column width.
+func truncCol(s string, n int) string {
+  r := []rune(s)
+  if len(r) <= n {
+    return s
+  }
+  return string(r[:n-1]) + "…"
+}
+
 // printHelp prints the full help table with default, effective value and description.
 func printHelp() {
   printBanner()
@@ -389,7 +477,11 @@ func printHelp() {
   fmt.Printf("%-30s  %-25s  %-25s  %s\n", "Variable", "Default", "Effective", "Description / Example")
   fmt.Printf("%s\n", strings.Repeat("-", 160))
   for _, v := range varDefs {
-    fmt.Printf("%-30s  %-25s  %-25s  %s\n", v.name, v.def, v.effective(), v.desc)
+    fmt.Printf("%-30s  %-25s  %-25s  %s\n",
+      v.name,
+      truncCol(v.def, 25),
+      truncCol(v.effective(), 25),
+      v.desc)
   }
   fmt.Println()
 }

@@ -18,7 +18,7 @@ build_target()
 
   printf "Building %s ...\n" "${out}"
   ( cd "${SRC_DIR}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-      go build -ldflags="-s -w" -o "${out}" . )
+      go build -buildvcs=false -ldflags="-s -w" -o "${out}" . )
 }
 
 TARGET="${1:-native}"
