@@ -1,9 +1,12 @@
-#!/bin/bash
+#!/bin/sh
 # compile.sh — build srvguard binary
 #
 # Usage:
-#   ./compile.sh           — build for current platform
-#   ./compile.sh all       — build for all supported platforms (amd64, arm64)
+#   ./compile.sh              — build for current platform (requires Go)
+#   ./compile.sh -all         — build amd64 + arm64 (requires Go)
+#   ./compile.sh -amd64       — build linux/amd64 (requires Go)
+#   ./compile.sh -arm64       — build linux/arm64 (requires Go)
+#   ./compile.sh -docker      — build for current platform inside golang:alpine
 
 set -e
 
@@ -14,34 +17,59 @@ git config core.hooksPath .githooks 2>/dev/null || true
 SRC_DIR="${SCRIPT_DIR}/src"
 BIN_DIR="${SCRIPT_DIR}/bin"
 
+GO_IMAGE="${GO_IMAGE:-golang:alpine}"
+
+usage() { printf "Usage: %s [-docker|-all|-amd64|-arm64]\n" "$0"; exit 1; }
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+OPT_DOCKER=false
+OPT_ALL=false
+OPT_ARCH=""
+
+for arg in "$@"; do
+    case "$arg" in
+        -docker) OPT_DOCKER=true ;;
+        -all)    OPT_ALL=true    ;;
+        -amd64)  OPT_ARCH=amd64  ;;
+        -arm64)  OPT_ARCH=arm64  ;;
+        *)       usage            ;;
+    esac
+done
+
+# ── Docker mode ───────────────────────────────────────────────────────────────
+
+if $OPT_DOCKER; then
+    command -v docker &>/dev/null || { printf "ERROR: docker not found\n" >&2; exit 1; }
+    printf "Building inside container (%s) → bin/srvguard ...\n" "${GO_IMAGE}"
+    docker run --rm \
+        -v "${SCRIPT_DIR}:/work" \
+        -w /work \
+        "${GO_IMAGE}" \
+        sh -c "sh compile.sh"
+    exit $?
+fi
+
+# ── Native build ──────────────────────────────────────────────────────────────
+
 build_target()
 {
-  local arch="$1"
-  local out="$2"
+    local arch="$1"
+    local out="$2"
 
-  printf "Building %s ...\n" "${out}"
-  ( cd "${SRC_DIR}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-      go build -buildvcs=false -ldflags="-s -w" -o "${out}" . )
+    printf "Building %s ...\n" "${out}"
+    ( cd "${SRC_DIR}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+        go build -buildvcs=false -ldflags="-s -w" -o "${out}" . )
 }
 
-TARGET="${1:-native}"
-
-case "${TARGET}" in
-  native)
-    NATIVE_ARCH=$(go env GOARCH)
-    build_target "${NATIVE_ARCH}" "${BIN_DIR}/srvguard"
-    ;;
-  all)
+if $OPT_ALL; then
     build_target amd64 "${BIN_DIR}/srvguard-linux-amd64"
     build_target arm64 "${BIN_DIR}/srvguard-linux-arm64"
-    ;;
-  amd64|arm64)
-    build_target "${TARGET}" "${BIN_DIR}/srvguard-linux-${TARGET}"
-    ;;
-  *)
-    printf "Usage: %s [all|amd64|arm64]\n" "$0"
-    exit 1
-    ;;
-esac
+elif [ -n "$OPT_ARCH" ]; then
+    build_target "${OPT_ARCH}" "${BIN_DIR}/srvguard-linux-${OPT_ARCH}"
+else
+    NATIVE_ARCH=$(go env GOARCH)
+    build_target "${NATIVE_ARCH}" "${BIN_DIR}/srvguard"
+fi
 
 printf "Done.\n"

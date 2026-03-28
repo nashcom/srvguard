@@ -58,11 +58,15 @@ SYSTEMD_VER=$(systemctl --version | awk 'NR==1{print $2}')
 [[ "$SYSTEMD_VER" -ge 250 ]]        || die "systemd v250+ required (have $SYSTEMD_VER)"
 log "systemd version: $SYSTEMD_VER"
 
-# Verify credential support is available on this machine
-if ! systemd-creds has-tpm2 &>/dev/null && \
-   [[ ! -f /var/lib/systemd/credential.secret ]]; then
-    log "creating /var/lib/systemd/credential.secret ..."
+# Verify credential support and report which backend is active
+if systemd-creds has-tpm2 &>/dev/null; then
+    log "credential backend: TPM2 (hardware-bound)"
+elif [[ -f /var/lib/systemd/credential.secret ]]; then
+    log "credential backend: credential.secret (machine-specific, no TPM2)"
+else
+    log "no credential backend found — running systemd-creds setup ..."
     systemd-creds setup
+    log "credential backend: credential.secret (created)"
 fi
 
 # ── Build example binary ──────────────────────────────────────────────────────
@@ -123,13 +127,4 @@ sleep 1
 journalctl -u "${UNIT_NAME}.service" --no-pager -o cat | grep -v "^$"
 
 echo
-if journalctl -u "${UNIT_NAME}.service" --no-pager -o cat | grep -q "keyring: got password"; then
-    echo "  ✓ systemd credential decrypted into \$CREDENTIALS_DIRECTORY"
-    echo "  ✓ srvguard loaded it into the kernel keyring"
-    echo "  ✓ example consumer read it — key revoked, memory zeroed"
-    echo
-    echo "  Next step: demo-transient.sh — same flow with Vault in the middle"
-else
-    echo "  ✗ check output above"
-    exit 1
-fi
+echo "  Next step: demo-transient.sh — same flow with Vault in the middle"

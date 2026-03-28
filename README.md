@@ -468,28 +468,32 @@ Produces `libsrvguard.a` for static linking into any native application.
 
 ## Building srvguard
 
-### Development binary
+Use `compile.sh` — output always lands in `bin/`.
+
+### Native (requires Go)
 
 ```bash
-go build -o srvguard .
+./compile.sh              # current platform → bin/srvguard
+./compile.sh -amd64       # → bin/srvguard-linux-amd64
+./compile.sh -arm64       # → bin/srvguard-linux-arm64
+./compile.sh -all         # both amd64 + arm64
 ```
 
-### Production static binary
+### Without Go — build inside a container
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o srvguard .
+./compile.sh -docker      # uses golang:alpine, no local Go required
 ```
 
-### Container — test image (Wolfi runtime)
+Output is written to `bin/srvguard` on the host via a volume mount.
+Override the image with `GO_IMAGE=golang:1.22-alpine ./compile.sh -docker`.
+
+### Container image (Docker)
 
 ```bash
-docker build --target test -t srvguard:test .
-```
-
-### Container — release image (Chainguard static)
-
-```bash
-docker build --target release -t srvguard:latest .
+./build.sh                # release image, local platform → docker load
+./build.sh -docker test   # test image
+REGISTRY=myregistry.example.com/srvguard ./build.sh push   # multi-arch push
 ```
 
 ## Vault Secret Format
