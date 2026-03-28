@@ -3,6 +3,7 @@ bin/srvguard
 bin/srvguard-*
 bin/*.exe
 src/srvguard
+src/*.exe
 
 # C/C++ build artifacts
 *.o

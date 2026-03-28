@@ -20,57 +20,57 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
+    "encoding/json"
+    "fmt"
+    "net/http"
 )
 
 // loginK8s authenticates to Vault using the Pod's service account JWT.
 // The JWT is read from cfg.K8sTokenFile (default Kubernetes mount path).
 // The Vault role and auth mount path are configurable.
 func (c *vaultClient) loginK8s(cfg *Config) error {
-	jwt, err := readFile(cfg.K8sTokenFile)
-	if err != nil {
-		return fmt.Errorf("reading K8s service account JWT from %s: %w", cfg.K8sTokenFile, err)
-	}
-	if jwt == "" {
-		return fmt.Errorf("K8s service account JWT at %s is empty", cfg.K8sTokenFile)
-	}
+    jwt, err := readFile(cfg.K8sTokenFile)
+    if err != nil {
+        return fmt.Errorf("reading K8s service account JWT from %s: %w", cfg.K8sTokenFile, err)
+    }
+    if jwt == "" {
+        return fmt.Errorf("K8s service account JWT at %s is empty", cfg.K8sTokenFile)
+    }
 
-	if cfg.K8sRole == "" {
-		return fmt.Errorf("SRVGUARD_K8S_ROLE is required for k8s auth")
-	}
+    if cfg.K8sRole == "" {
+        return fmt.Errorf("SRVGUARD_K8S_ROLE is required for k8s auth")
+    }
 
-	body, _ := json.Marshal(map[string]string{
-		"jwt":  jwt,
-		"role": cfg.K8sRole,
-	})
+    body, _ := json.Marshal(map[string]string{
+        "jwt":  jwt,
+        "role": cfg.K8sRole,
+    })
 
-	loginPath := "/v1/auth/" + cfg.K8sAuthMount + "/login"
-	resp, err := c.post(loginPath, "", body)
-	if err != nil {
-		return fmt.Errorf("k8s login: %w", err)
-	}
-	defer resp.Body.Close()
+    loginPath := "/v1/auth/" + cfg.K8sAuthMount + "/login"
+    resp, err := c.post(loginPath, "", body)
+    if err != nil {
+        return fmt.Errorf("k8s login: %w", err)
+    }
+    defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("k8s login returned HTTP %d", resp.StatusCode)
-	}
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("k8s login returned HTTP %d", resp.StatusCode)
+    }
 
-	var result struct {
-		Auth struct {
-			ClientToken string `json:"client_token"`
-		} `json:"auth"`
-	}
+    var result struct {
+        Auth struct {
+            ClientToken string `json:"client_token"`
+        } `json:"auth"`
+    }
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("decoding k8s login response: %w", err)
-	}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return fmt.Errorf("decoding k8s login response: %w", err)
+    }
 
-	if result.Auth.ClientToken == "" {
-		return fmt.Errorf("vault k8s login returned empty token")
-	}
+    if result.Auth.ClientToken == "" {
+        return fmt.Errorf("vault k8s login returned empty token")
+    }
 
-	c.token = result.Auth.ClientToken
-	return nil
+    c.token = result.Auth.ClientToken
+    return nil
 }

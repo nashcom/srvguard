@@ -9,13 +9,13 @@
 package main
 
 import (
-  "crypto/tls"
-  "crypto/x509"
-  "fmt"
+    "crypto/tls"
+    "crypto/x509"
+    "fmt"
 )
 
 func loadClientCert(cfg *Config, pool *x509.CertPool) (tls.Certificate, error) {
-  return tls.Certificate{}, fmt.Errorf(
-    "mTLS cert auth (SRVGUARD_AUTH_METHOD=cert) requires Linux (/etc/machine-id); use AppRole auth on this platform",
-  )
+    return tls.Certificate{}, fmt.Errorf(
+        "mTLS cert auth (SRVGUARD_AUTH_METHOD=cert) requires Linux (/etc/machine-id); use AppRole auth on this platform",
+    )
 }

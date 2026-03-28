@@ -23,31 +23,31 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+    "fmt"
+    "os"
+    "path/filepath"
 )
 
 // loginSystemd authenticates by reading a Vault token from a systemd
 // credential.  $CREDENTIALS_DIRECTORY must be set by the service manager.
 // The credential name is cfg.SystemdCred (default "vault-token").
 func (c *vaultClient) loginSystemd(cfg *Config) error {
-	credsDir := os.Getenv("CREDENTIALS_DIRECTORY")
-	if credsDir == "" {
-		return fmt.Errorf(
-			"CREDENTIALS_DIRECTORY is not set — srvguard must run as a systemd service with LoadCredential= configured",
-		)
-	}
+    credsDir := os.Getenv("CREDENTIALS_DIRECTORY")
+    if credsDir == "" {
+        return fmt.Errorf(
+            "CREDENTIALS_DIRECTORY is not set — srvguard must run as a systemd service with LoadCredential= configured",
+        )
+    }
 
-	credPath := filepath.Join(credsDir, cfg.SystemdCred)
-	token, err := readFile(credPath)
-	if err != nil {
-		return fmt.Errorf("reading systemd credential %q: %w", credPath, err)
-	}
-	if token == "" {
-		return fmt.Errorf("systemd credential %q is empty", credPath)
-	}
+    credPath := filepath.Join(credsDir, cfg.SystemdCred)
+    token, err := readFile(credPath)
+    if err != nil {
+        return fmt.Errorf("reading systemd credential %q: %w", credPath, err)
+    }
+    if token == "" {
+        return fmt.Errorf("systemd credential %q is empty", credPath)
+    }
 
-	c.token = token
-	return nil
+    c.token = token
+    return nil
 }

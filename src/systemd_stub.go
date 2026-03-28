@@ -10,7 +10,7 @@ package main
 import "fmt"
 
 func (c *vaultClient) loginSystemd(cfg *Config) error {
-	return fmt.Errorf(
-		"systemd credential auth (SRVGUARD_AUTH_METHOD=systemd) requires Linux",
-	)
+    return fmt.Errorf(
+        "systemd credential auth (SRVGUARD_AUTH_METHOD=systemd) requires Linux",
+    )
 }
