@@ -2,6 +2,13 @@
 
 *by Nash!Com*
 
+> **TL;DR —** Certificate maximum lifetimes dropped to 200 days in March 2026
+> and will reach 47 days by 2029. At that frequency manual renewal breaks.
+> HCL Domino CertMgr automates this end-to-end for Domino servers. For
+> everything outside Domino — NGINX, load balancers, other services — Vault
+> and srvguard close the distribution gap. Rotating the private key on every
+> renewal cycle is the part most deployments have not solved yet.
+
 ---
 
 ## The Clock Is Already Ticking
@@ -30,7 +37,6 @@ certificates automatically every month, it will break.
 it is here. Certificates issued with more than 200-day validity are no longer
 trusted by major browsers.
 
----
 
 ## This Has Been Building for a Long Time
 
@@ -50,7 +56,6 @@ The message from every major browser and CA is the same: manual certificate
 management is over. Automation is no longer a best practice, it is a
 requirement.
 
----
 
 ## Renewal Is Not Enough — Keys Must Rotate Too
 
@@ -82,7 +87,6 @@ This is more demanding operationally. A new key means:
 With 47-day cycles, this happens roughly every six weeks — automatically,
 reliably, for every server in your infrastructure.
 
----
 
 ## What CertStore Already Does
 
@@ -105,7 +109,6 @@ Closing that gap, so that every renewal automatically produces a new key pair
 without manual intervention, is the next step. At 47-day cycles that step
 becomes mandatory.
 
----
 
 ## The Gap: Externally Deployed Certificates
 
@@ -128,7 +131,6 @@ What is needed is a distribution layer that:
 - Triggers automatic reload when new material arrives
 - Scales to frequent rotation without manual intervention
 
----
 
 ## HashiCorp Vault as the Distribution Layer
 
@@ -149,7 +151,6 @@ The security properties align well with the shorter-lifetime model:
 - Vault's audit log provides a full record of every access
 - A server compromise exposes only what was in memory at that moment
 
----
 
 ## The Timeline for Action
 
@@ -162,7 +163,6 @@ effect March 15, 2027. That is the window to build and validate the automation.
 By the time 47-day certificates arrive in 2029, the operational patterns need
 to be routine, not experimental.
 
----
 
 ## What I Am Building at Nash!Com
 
@@ -256,7 +256,6 @@ Domino loads, the Extension Manager hook reads it exactly once, revokes the
 key immediately, and passes it to Domino in memory. No files, no environment
 variables, gone after first use.
 
----
 
 ## Open Source
 
@@ -279,7 +278,6 @@ Commercial services around implementation, integration with specific
 environments, and ongoing support are available through
 [Nash!Com](https://www.nashcom.de).
 
----
 
 ## References
 

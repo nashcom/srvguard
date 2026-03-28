@@ -3,6 +3,12 @@
 **Nash!Com Service Guard** — a universal service launcher and secret manager
 for secure, automated secret delivery to any workload.
 
+> **TL;DR —** A statically compiled binary that authenticates to Vault (or reads a
+> systemd credential), fetches secrets, and delivers them to any process —
+> TLS certificates to NGINX, `server.id` passwords to Domino — without keys
+> ever touching disk. Supports VM, container, and Kubernetes deployments using
+> each platform's native identity mechanism.
+
 `srvguard` solves a fundamental bootstrap problem: a service needs its
 secrets (TLS certificate, private key, password) before it can start, but
 those secrets live in a protected store that requires authentication to access.
@@ -163,7 +169,6 @@ Environment=SRVGUARD_AUTH_METHOD=systemd
 See [systemd Credentials](docs/systemd-credentials.md) for background
 on how systemd credentials work and security properties.
 
----
 
 ## Output Backends
 

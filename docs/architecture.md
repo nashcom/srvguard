@@ -1,5 +1,13 @@
 # Secret Distribution Across Platforms — VM, Container, and Kubernetes
 
+> **TL;DR —** srvguard adapts to the identity mechanism the platform provides.
+> On VMs it reads a systemd credential. In containers it reads credential files
+> the host placed on a mount. On Kubernetes it uses the Pod's service account JWT.
+> All three paths lead to the same result: Vault delivers the secret, the
+> application never handles authentication directly.
+
+---
+
 ## The Core Pattern
 
 Every platform already provides a way to establish identity. srvguard uses
@@ -12,7 +20,6 @@ platform identity → authentication → short-lived credentials → application
 The result is a consistent operational model across three deployment modes.
 No custom trust infrastructure is required on any path.
 
----
 
 ## Mode 1 — VM (systemd)
 
@@ -72,7 +79,6 @@ platform components.
 produce a `.cred` file. Deploy it to `/etc/srvguard/` on the target host.
 One-time operation per host.
 
----
 
 ## Mode 2 — Container (credential file)
 
@@ -109,7 +115,6 @@ interface.
 container's FQDN/role to the bind-mount path before the container starts.
 A compromised container can only access its own secret path.
 
----
 
 ## Mode 3 — Kubernetes
 
@@ -163,7 +168,6 @@ vault write auth/kubernetes/role/srvguard \
 
 See the nsh-vault-deploy provisioner for the full setup.
 
----
 
 ## Combined — VM Host + Containers (Mode 1 + Mode 2)
 
@@ -200,7 +204,6 @@ This separation also means the container image needs no secret baked in.
 The same image runs in dev, staging, and production — only the mount content
 differs.
 
----
 
 ## Auth Method Summary
 
@@ -213,7 +216,6 @@ differs.
 
 > `approle` is accepted as an alias for `file` for backward compatibility.
 
----
 
 ## Design Principles
 
@@ -243,7 +245,6 @@ The same `srvguard` binary runs as a host-side credential delivery service
 (Mode 1) and as an in-container application wrapper (Mode 2). Configuration
 determines the role.
 
----
 
 ## Relationship to Other Components
 
