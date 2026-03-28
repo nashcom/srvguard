@@ -1,7 +1,7 @@
 # srvguard
 
 **Nash!Com Service Guard** — a universal service launcher and secret manager
-for [HashiCorp Vault](https://www.vaultproject.io/)-integrated workloads.
+for secure, automated secret delivery to any workload.
 
 `srvguard` solves a fundamental bootstrap problem: a service needs its
 secrets (TLS certificate, private key, password) before it can start, but
@@ -491,7 +491,7 @@ docker build --target release -t srvguard:latest .
 
 `srvguard` expects a flat KV v2 secret. Field names are flexible —
 configure the consumer to read whichever fields are present. The defaults
-used by [nashcom-vault](https://github.com/nashcom/nashcom-vault) are:
+used by [nsh-vault-deploy](https://github.com/nashcom/nsh-vault-deploy) are:
 
 **TLS credentials:**
 

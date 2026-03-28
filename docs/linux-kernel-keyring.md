@@ -3,9 +3,10 @@
 ## What It Is
 
 The Linux kernel keyring is an in-kernel storage facility for small secrets —
-passwords, tokens, cryptographic keys — that never leave kernel memory.
-Secrets placed in the keyring are not visible in `/proc`, are not swapped to
-disk, and survive only as long as the keyring that holds them exists.
+passwords, tokens, cryptographic keys — stored in kernel memory and not
+exposed via normal userspace interfaces. Secrets placed in the keyring are
+not directly written to disk by the keyring subsystem, and survive only as
+long as the keyring that holds them exists.
 
 It was introduced in Linux 2.6.10 and is present in every modern Linux
 distribution. No additional software is required.
@@ -19,8 +20,9 @@ distribution. No additional software is required.
 keyring is destroyed, all keys in it are destroyed.
 
 **Session keyring:** created when a process session starts, destroyed when it
-ends. Each login session or service invocation gets its own keyring that
-cannot be accessed by other sessions.
+ends. Each login session or service invocation gets its own keyring that is
+isolated by default from other sessions, unless explicitly shared or accessed
+by a sufficiently privileged process.
 
 **Key permissions:** each key has owner/group/other permission bits controlling
 who can read, write, search, or link it. A key created by `srvguard` with
@@ -30,13 +32,16 @@ who can read, write, search, or link it. A key created by `srvguard` with
 
 The keyring provides properties that files on disk cannot:
 
-- **Memory-only:** the payload never touches the filesystem, swap, or any disk
-  buffer. Hibernation aside, it is never written anywhere persistent.
+- **Not written to disk by the subsystem:** the keyring itself does not write
+  payloads to the filesystem or any disk buffer. Kernel memory can theoretically
+  be swapped or captured in a hibernation image or crash dump, but the keyring
+  does not actively persist secrets — unlike a file or environment variable.
 - **Lifecycle-bound:** a key attached to a session keyring is automatically
   destroyed when the session ends — no cleanup required.
 - **Kernel-enforced access control:** the kernel enforces permissions on every
-  read attempt. Even root cannot read a key owned by another user without
-  `CAP_SYS_ADMIN`.
+  read attempt. Key payload is not exposed via `/proc` — though key metadata
+  (serial number, description) may be visible in `/proc/keys`. Even root
+  cannot read a key payload owned by another user without `CAP_SYS_ADMIN`.
 - **Read-once pattern:** the consumer reads the key payload once and
   immediately revokes it. After revocation the key is gone — any second read
   fails, even by the original owner.

@@ -2,14 +2,14 @@
 
 ## What They Are
 
-systemd credentials are encrypted, service-scoped secrets injected into
-services at startup by the service manager. They are the systemd-native answer
-to the question: *how does a service get a secret without storing it in a
-config file?*
+systemd credentials are service-scoped secrets injected into services at
+startup by the service manager. They can optionally be encrypted at rest.
+They are the systemd-native answer to the question: *how does a service get
+a secret without storing it in a config file?*
 
-Introduced in systemd v250 (released December 2021, standard in RHEL 9,
-Debian 12, Ubuntu 22.04+), credentials are available on every current
-enterprise Linux distribution.
+Introduced in systemd v250 (released December 2021), credentials are
+available on distributions shipping systemd v250 or newer — including
+RHEL 9+, Debian 12+, and Ubuntu 22.04+.
 
 ## How They Work
 
@@ -20,9 +20,9 @@ enterprise Linux distribution.
 systemd-creds encrypt --name=vault-token - /etc/srvguard/vault-token.cred
 ```
 
-The credential is encrypted using the machine's TPM2 binding or, on machines
-without TPM2, a machine-specific key derived from `/var/lib/systemd/credential.secret`.
-The resulting `.cred` file is unreadable on any other machine.
+The credential is encrypted using TPM2 (if available) or a machine-specific
+secret stored in `/var/lib/systemd/credential.secret`. The resulting `.cred`
+file cannot be decrypted elsewhere unless that machine secret is also copied.
 
 **Delivery (automatic, at service start):**
 
@@ -34,10 +34,11 @@ LoadCredentialEncrypted=vault-token:/etc/srvguard/vault-token.cred
 
 systemd decrypts the credential before starting the service and places the
 plaintext in `$CREDENTIALS_DIRECTORY/<name>`. The directory is:
-- On a `tmpfs` mount (memory only, never hits disk)
+- On a `tmpfs` mount — memory-backed, not intentionally written to disk
+  (though kernel memory may still be captured in swap or hibernation images)
 - Owned by the service user
-- Mode `0500` — no other user or service can read it
-- Destroyed when the service stops
+- Mode `0500` — inaccessible to other unprivileged users and services
+- Removed when the service stops as part of systemd cleanup
 
 The service reads the secret from `$CREDENTIALS_DIRECTORY/vault-token`. By the
 time the service sees it, decryption is complete and the secret is in memory.
@@ -45,19 +46,22 @@ time the service sees it, decryption is complete and the secret is in memory.
 ## Security Properties
 
 **Encrypted at rest:** the `.cred` file stored in `/etc/srvguard/` is
-ciphertext. Even full disk access does not yield the secret.
+ciphertext. Disk access alone does not reveal the secret unless the
+machine-specific key (`credential.secret` or TPM2) is also compromised.
 
-**Machine-bound:** the encryption key is derived from TPM2 or a machine secret
-that does not leave the host. The credential cannot be decrypted on another
-machine.
+**Machine-bound (with TPM2):** when TPM2 is available, the encryption key
+is hardware-bound and the credential cannot be decrypted on another machine.
+Without TPM2, the binding is only as strong as the protection of
+`/var/lib/systemd/credential.secret`.
 
 **Memory-only at runtime:** `$CREDENTIALS_DIRECTORY` lives in tmpfs. The
-plaintext secret is never written to any persistent storage during service
-execution.
+plaintext secret is not intentionally written to persistent storage during
+service execution, though it may appear in swap or hibernation images.
 
-**Service-scoped:** each service gets its own `$CREDENTIALS_DIRECTORY`. Other
-services on the same host cannot read another service's credentials — enforced
-by the kernel via mount namespaces and file permissions.
+**Service-scoped:** each service gets its own `$CREDENTIALS_DIRECTORY`.
+Other unprivileged services on the same host cannot read another service's
+credentials — enforced via mount namespaces and file permissions. Privileged
+processes (root) can bypass these controls.
 
 **No daemon process required:** unlike Vault Agent or similar, systemd
 credentials need no running sidecar. The service manager handles decryption as
@@ -65,13 +69,13 @@ part of normal service startup.
 
 ## Comparison with Alternatives
 
-| Mechanism | Encrypted at rest | Memory-only runtime | Machine-bound | Service-scoped |
-|---|---|---|---|---|
-| systemd credential | ✓ | ✓ | ✓ | ✓ |
-| Environment variable | ✗ | ✗ | ✗ | ✗ |
-| File on disk | ✗ | ✗ | ✗ | ✗ |
-| Vault Agent | ✓ | Optional | ✗ | Optional |
-| Linux kernel keyring | N/A | ✓ | ✗ | ✓ (session) |
+| Mechanism            | Encrypted at rest | Memory-only runtime | Machine-bound    | Service-scoped        |
+|----------------------|-------------------|---------------------|------------------|-----------------------|
+| systemd credential   | ✓ (with Encrypted=) | ✓ (tmpfs)         | ✓ with TPM2      | ✓                     |
+| Environment variable | ✗                 | ✗                   | ✗                | ✗                     |
+| File on disk         | ✗                 | ✗                   | ✗                | ✗                     |
+| Vault Agent          | ✓                 | Optional            | ✗                | Optional              |
+| Linux kernel keyring | N/A               | ✓                   | ✗                | ✓ (per user/session)  |
 
 ## How srvguard Uses Them
 
@@ -81,26 +85,26 @@ uses the content as a pre-issued Vault token. No login HTTP call is made — the
 token is the credential.
 
 This means the Vault authentication step has no network round-trip: the token
-is already present in memory before srvguard starts. Vault sees an
-authenticated request for the secret; it does not need to validate a role or
-certificate.
+is already present in memory before srvguard starts. No authentication
+exchange is required — the token is pre-issued and Vault validates it
+directly on the first secret request.
 
 The typical deployment on a VM:
 
 ```
 operator                 systemd                  srvguard              Vault
    │                        │                        │                    │
-   │  systemd-creds encrypt  │                        │                    │
-   │  vault-token.cred       │                        │                    │
-   │────────────────────────►│                        │                    │
-   │                         │  service start         │                    │
-   │                         │  decrypt → tmpfs       │                    │
-   │                         │───────────────────────►│                    │
-   │                         │                        │  GET /v1/secret/.. │
-   │                         │                        │───────────────────►│
-   │                         │                        │◄───────────────────│
-   │                         │                        │  write to tmpfs    │
-   │                         │                        │  signal NGINX      │
+   │  systemd-creds encrypt │                        │                    │
+   │  vault-token.cred      │                        │                    │
+   │───────────────────────►│                        │                    │
+   │                        │  service start         │                    │
+   │                        │  decrypt → tmpfs       │                    │
+   │                        │───────────────────────►│                    │
+   │                        │                        │  GET /v1/secret/.. │
+   │                        │                        │───────────────────►│
+   │                        │                        │◄───────────────────│
+   │                        │                        │  write to tmpfs    │
+   │                        │                        │  signal NGINX      │
 ```
 
 ## Practical Notes
@@ -108,7 +112,7 @@ operator                 systemd                  srvguard              Vault
 - `systemd-creds` is in the `systemd` package — no additional install needed
 - Use `LoadCredentialEncrypted=` for secrets (TPM2/machine-bound encryption)
 - Use `LoadCredential=` for non-secret data that must just be injected
-- On containers: systemd is usually not PID 1; use the file-on-tmpfs approach
+- On containers: systemd is often not PID 1; use the file-on-tmpfs approach
   instead and let the host VM manage credentials for the container
 - Re-provisioning: encrypt a new token, replace the `.cred` file, restart the
   service — no host reboot required
