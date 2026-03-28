@@ -1,0 +1,10 @@
+#!/bin/bash
+# pre-commit hook — ensure all .sh files staged for commit are executable.
+# Installed automatically by build.sh via: git config core.hooksPath .githooks
+
+git diff --cached --name-only | grep '\.sh$' | while read -r f; do
+    if [[ "$(git ls-files --stage "$f" | cut -c1-6)" == "100644" ]]; then
+        git update-index --chmod=+x "$f"
+        echo "  chmod+x $f"
+    fi
+done

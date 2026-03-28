@@ -8,6 +8,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Ensure git uses the shared hooks directory so .sh files are kept executable.
+git config core.hooksPath .githooks 2>/dev/null || true
 SRC_DIR="${SCRIPT_DIR}/src"
 BIN_DIR="${SCRIPT_DIR}/bin"
 
