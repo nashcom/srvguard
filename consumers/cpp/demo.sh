@@ -114,7 +114,7 @@ systemd-run \
     --setenv=SRVGUARD_SYSTEMD_CRED="${CRED_NAME}" \
     --setenv=SRVGUARD_OUTPUT_MODE=keyring \
     --setenv=SRVGUARD_KEYRING_LABEL=srvguard \
-    "$SRVGUARD_BIN" "$EXAMPLE_BIN"
+    "$SRVGUARD_BIN" -- "$EXAMPLE_BIN"
 
 # ── Result ────────────────────────────────────────────────────────────────────
 

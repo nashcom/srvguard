@@ -82,7 +82,7 @@ Environment=SRVGUARD_MAIL_TO=ops@example.com
 Environment=SRVGUARD_MAIL_RELAY=smtp.example.com
 
 # ── Process supervision
-ExecStart=/bin/srvguard /usr/sbin/nginx -g 'daemon off;'
+ExecStart=/bin/srvguard -- /usr/sbin/nginx -g 'daemon off;'
 Restart=on-failure
 RestartSec=5s
 
@@ -123,7 +123,7 @@ systemd-run \
     --setenv=SRVGUARD_SYSTEMD_CRED=vault-token \
     --setenv=SRVGUARD_SECRET_FQDN=myserver.example.com \
     --setenv=SRVGUARD_OUTPUT_DIR=/run/srvguard-test/secrets \
-    /bin/srvguard /usr/sbin/nginx -g 'daemon off;'
+    /bin/srvguard -- /usr/sbin/nginx -g 'daemon off;'
 ```
 
 Check status and follow logs:
