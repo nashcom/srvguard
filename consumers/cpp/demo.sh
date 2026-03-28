@@ -14,7 +14,7 @@
 #   - systemd v250+  with credential support
 #   - /var/lib/systemd/credential.secret  (created automatically if missing)
 #   - g++, make
-#   - srvguard binary  (set SRVGUARD_BIN= to override)
+#   - srvguard binary  (export SRVGUARD_BIN= to override)
 #
 # Usage:
 #   ./demo.sh
@@ -25,7 +25,7 @@ set -euo pipefail
 
 UNIT_NAME="srvguard-keyring-demo"
 CRED_NAME="key_password"          # must match SrvGuardKeyringRead field in example.cpp
-CRED_FILE="/tmp/${CRED_NAME}.cred"
+CRED_FILE="/tmp/${CRED_NAME}"
 SRVGUARD_BIN="${SRVGUARD_BIN:-/bin/srvguard}"
 EXAMPLE_BIN="$(cd "$(dirname "$0")" && pwd)/example"
 
@@ -52,7 +52,7 @@ command -v g++           &>/dev/null || die "g++ not found — install build-ess
 command -v make          &>/dev/null || die "make not found — install build-essential"
 command -v systemd-creds &>/dev/null || die "systemd-creds not found (need systemd v250+)"
 command -v systemd-run   &>/dev/null || die "systemd-run not found"
-[[ -x "$SRVGUARD_BIN" ]]            || die "$SRVGUARD_BIN not found — set SRVGUARD_BIN="
+[[ -x "$SRVGUARD_BIN" ]]            || die "$SRVGUARD_BIN not found — export SRVGUARD_BIN="
 
 SYSTEMD_VER=$(systemctl --version | awk 'NR==1{print $2}')
 [[ "$SYSTEMD_VER" -ge 250 ]]        || die "systemd v250+ required (have $SYSTEMD_VER)"
@@ -82,9 +82,8 @@ log "credential:    $CRED_NAME"
 log "encrypted to:  $CRED_FILE"
 
 echo -n "$TEST_SECRET" | \
-    systemd-creds encrypt --name="$CRED_NAME" - "$CRED_FILE" || \
-    die "systemd-creds encrypt failed — this machine may not support credential encryption.
-       On WSL use a VM or physical host with systemd credential support."
+    systemd-creds encrypt - "$CRED_FILE" || \
+    die "systemd-creds encrypt failed — this machine may not support credential encryption."
 
 # Verify round-trip
 VERIFY=$(systemd-creds decrypt "$CRED_FILE" -)

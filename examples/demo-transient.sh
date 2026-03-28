@@ -15,7 +15,7 @@ set -euo pipefail
 
 UNIT_NAME="srvguard-demo"
 SRVGUARD_BIN="${SRVGUARD_BIN:-/bin/srvguard}"
-CRED_FILE="${CRED_FILE:-/tmp/${CRED_NAME}.cred}"
+CRED_FILE="${CRED_FILE:-/tmp/${CRED_NAME}}"
 CRED_NAME="vault-token"
 OUTPUT_DIR="/run/srvguard-demo/secrets"
 
@@ -72,7 +72,7 @@ require systemd-creds "install systemd (v250+)"
 require systemd-run   "install systemd (v250+)"
 require systemctl     "install systemd"
 
-[[ -x "$SRVGUARD_BIN" ]] || die "$SRVGUARD_BIN not found — set SRVGUARD_BIN=/path/to/srvguard"
+[[ -x "$SRVGUARD_BIN" ]] || die "$SRVGUARD_BIN not found — export SRVGUARD_BIN=/path/to/srvguard"
 log "srvguard binary: $SRVGUARD_BIN"
 
 SYSTEMD_VER=$(systemctl --version | awk 'NR==1{print $2}')

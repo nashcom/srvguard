@@ -18,7 +18,7 @@ set -euo pipefail
 
 UNIT_NAME="srvguard-local-demo"
 CRED_NAME="test-secret"
-CRED_FILE="/tmp/${CRED_NAME}.cred"
+CRED_FILE="/tmp/${CRED_NAME}"
 
 log()  { echo "  $*"; }
 info() { echo; echo "── $* ──"; }
