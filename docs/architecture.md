@@ -36,17 +36,17 @@ in `$CREDENTIALS_DIRECTORY` — a tmpfs path scoped to that service alone.
 ```
 operator                 systemd                   srvguard            Vault
    │                        │                         │                  │
-   │  systemd-creds encrypt  │                         │                  │
-   │  → vault-token.cred     │                         │                  │
-   │────────────────────────►│                         │                  │
-   │                         │  service start          │                  │
-   │                         │  decrypt → tmpfs        │                  │
-   │                         │────────────────────────►│                  │
-   │                         │                         │  GET /v1/secret/ │
-   │                         │                         │─────────────────►│
-   │                         │◄────────────────────────────────────────────│
-   │                         │                         │  write to tmpfs  │
-   │                         │                         │  signal service  │
+   │  systemd-creds encrypt │                         │                  │
+   │  → vault-token.cred    │                         │                  │
+   │───────────────────────►│                         │                  │
+   │                        │  service start          │                  │
+   │                        │  decrypt → tmpfs        │                  │
+   │                        │────────────────────────►│                  │
+   │                        │                         │  GET /v1/secret/ │
+   │                        │                         │─────────────────►│
+   │                        │◄───────────────────────────────────────────│
+   │                        │                         │  write to tmpfs  │
+   │                        │                         │  signal service  │
 ```
 
 **Unit file snippet:**
