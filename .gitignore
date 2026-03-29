@@ -7,7 +7,9 @@ src/*.exe
 
 # C/C++ build artifacts
 *.o
+*.o.notes
 *.a
+*.so
 consumers/cpp/example
 consumers/cpp/srvguard
 

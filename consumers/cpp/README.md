@@ -1,89 +1,34 @@
 # srvguard C++ consumer
 
-*by Nash!Com*
-
-> **TL;DR —** A header-only C++ library that reads secrets from the Linux kernel
-> keyring or the files backend. Drop `srvguard.hpp` and `srvguard.cpp` into any
-> native application. No Vault dependency, no curl, no external libraries — just
-> standard C++ and Linux syscalls.
+A C++ library that reads secrets from the Linux kernel keyring. Drop
+`srvguard.hpp` and `srvguard.cpp` into any native application — no Vault
+dependency, no curl, no external libraries, just standard C++ and Linux syscalls.
 
 ---
 
 ## The security chain
 
-When srvguard delivers a secret it never writes it to a world-readable file or
-an environment variable. The path from disk to your application is:
-
 ```
 systemd (LoadCredentialEncrypted=)
-  │  machine-encrypted .cred file — useless without this machine's key
-  │
+  │  machine-encrypted .cred file
   ▼
 $CREDENTIALS_DIRECTORY/<name>
-  │  tmpfs, private mount namespace, service-scoped, deleted on stop
-  │
+  │  tmpfs, private mount namespace, service-scoped
   ▼
 srvguard
-  │  reads the credential, authenticates to Vault (or passes through in local mode)
-  │  writes the secret into the kernel keyring
-  │
+  │  reads the credential, writes the secret into the kernel keyring
   ▼
-kernel keyring {"field":"value"}
-  │  kernel memory, not in any filesystem, session-scoped
-  │
+kernel keyring  {"field":"value"}
+  │  kernel memory, session-scoped, not in any filesystem
   ▼
 your application
-  SrvGuardKeyringRead(...)   — read once, key revoked, buffer zeroed
+     SrvGuardKeyringRead(...)  — read once, key revoked, buffer zeroed
 ```
 
 The secret exists in plaintext for milliseconds — in kernel memory, in one
-service's session, read once and gone.
+session, read once and gone.
 
-## Consumption patterns
-
-Three patterns cover most real-world deployments. The consumer library API is
-identical in all three.
-
-### Pattern 1 — local secret, no Vault
-
-A secret (server.id password, API key, certificate password) is protected by
-systemd and delivered directly to the application. No Vault, no network.
-
-```
-systemd  →  srvguard (local mode)  →  keyring  →  application
-```
-
-Use this when:
-- You want strong secret protection without Vault infrastructure
-- The secret is machine-specific (server.id password, local API key)
-- You need a fast on-ramp — Vault can be added later without touching the app
-
-### Pattern 2 — Vault-backed secret
-
-srvguard authenticates to Vault, fetches secrets, and delivers them to the
-keyring. The application never holds Vault credentials.
-
-```
-systemd  →  srvguard  →  Vault  →  keyring  →  application
-```
-
-Use this when:
-- Secrets are managed centrally and rotated automatically
-- You need audit trails, lease expiry, and dynamic secrets
-- Multiple servers share the same secret path
-
-### Pattern 3 — file backend (nginx, legacy apps)
-
-Some applications cannot use the keyring API. srvguard writes to a tmpfs
-directory instead. The file is still service-scoped and disappears on stop.
-
-```
-systemd  →  srvguard  →  /run/srvguard/certs/  →  application reads file
-```
-
-Use this when:
-- Integrating with nginx `ssl_password_file`, certificate reload hooks, or
-  any application that reads configuration files at startup
+---
 
 ## Building
 
@@ -95,93 +40,109 @@ make
 Produces `libsrvguard.a` and the `example` demo binary. Requires `g++` with
 C++17 support — no external dependencies.
 
+To build `domsrvguard.so` (requires the Notes C-API):
+
+```bash
+make domsrvguard
+```
+
+---
+
 ## Running the demo
 
-`demo.sh` walks through Pattern 1 end to end. It encrypts a test secret with
+`demo.sh` walks through the full chain end to end — encrypts a test secret with
 `systemd-creds`, runs srvguard in local mode, and launches the `example` binary
 as the child process. The example binary reads the secret from the keyring,
 prints it, revokes the key, and zeros the buffer.
 
-The demo uses a [transient systemd service](https://www.freedesktop.org/software/systemd/man/systemd-run.html)
-(`systemd-run`) for convenience — no unit file needed, everything is cleaned up
-on exit.
-
 ```bash
-# run the full demo
 sudo ./demo.sh
-
-# clean up afterwards
 sudo ./demo.sh --clean
 ```
 
-What you will see:
-
-```
-── Building example consumer ──
-── Encrypting test secret ──
-  secret value:  demo-password-1743163489
-  encrypted to:  /tmp/srvguard-keyring-demo.cred
-  decrypt verified OK
-── Launching transient service ──
-  Chain:
-    systemd LoadCredentialEncrypted= → $CREDENTIALS_DIRECTORY/key_password
-    srvguard (local mode)            → kernel keyring {"key_password":"..."}
-    example binary                   → SrvGuardKeyringRead → revoke → zero
-── Result ──
-  keyring: got password (26 chars)
-  ✓ systemd credential decrypted into $CREDENTIALS_DIRECTORY
-  ✓ srvguard loaded it into the kernel keyring
-  ✓ example consumer read it — key revoked, memory zeroed
-```
+---
 
 ## Library API
 
 ```cpp
 #include "srvguard.hpp"
 
-// Read one field from the kernel keyring.
-// The key is revoked immediately after reading — one-time access.
-bool SrvGuardKeyringRead (const char *pszLabel,   // keyring key label (SRVGUARD_KEYRING_LABEL)
+// Read one field from the kernel keyring and immediately revoke the key.
+// One-time access — the key cannot be read again after this call.
+// Use this for final consumption.
+bool SrvGuardKeyringRead (const char *pszLabel,   // keyring key label
                           const char *pszField,   // JSON field name
                           char       *pszValue,   // output buffer
                           size_t      nMaxLen);
 
-// Read a file written by srvguard's files backend.
-bool SrvGuardFileRead    (const char *pszDir,     // SRVGUARD_OUTPUT_DIR or $CREDENTIALS_DIRECTORY
-                          const char *pszFile,    // field name / filename
+// Read one field from the kernel keyring without revoking the key.
+// Use this when a subsequent read of the same key is expected — for example
+// when setup code needs the password before the unlock callback fires.
+// SrvGuardKeyringRead in the callback then consumes and revokes the key.
+bool SrvGuardKeyringPeek (const char *pszLabel,
+                          const char *pszField,
                           char       *pszValue,
                           size_t      nMaxLen);
 
 // Zero a buffer — volatile, not optimised away by the compiler.
+// Call after consuming any secret to prevent it lingering in memory.
 void SrvGuardZero        (void *pBuf, size_t nLen);
 ```
 
-## Integration example — Domino Extension Manager
+---
 
-The EM calls `SrvGuardKeyringRead` at startup before the server.id password is
-needed. srvguard must have loaded the keyring before Domino starts — handled
-automatically when srvguard is the process supervisor (`ExecStart=/bin/srvguard
-/opt/domino/bin/server`).
+## domsrvguard — Domino Extension Manager
 
-```cpp
-char szPassword[512] = {};
+> **See also:** [Domino CertMgr on GitHub](https://opensource.hcltechsw.com/domino-cert-manager/) —
+> [HCL documentation](https://help.hcl-software.com/domino/14.5.1/admin/certificate_management_with_certmgr.html)
 
-if (SrvGuardKeyringRead("srvguard", "server_id_password",
-                         szPassword, sizeof(szPassword)))
-{
-    // hand szPassword to the Notes C API
-    // srvguard has already revoked the key — it cannot be read again
-    SrvGuardZero(szPassword, sizeof(szPassword));
-}
+`domsrvguard.so` is a Domino Extension Manager that delivers the server.id
+password directly from the srvguard kernel keyring. No external process, no
+files, no pipes. Domino never prompts for a password.
+
+CertMgr handles all TLS certificate lifecycle on Domino. domsrvguard covers the
+one thing CertMgr does not: delivering the server.id password at startup.
+
+### notes.ini variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `EXTMGR_ADDINS=domsrvguard` | always | Load the extension manager |
+| `EXTMGR_ADDINS_EARLY=domsrvguard` | transaction log only | Load before transaction log recovery |
+| `KeyFilename=<path>` | initial setup only | Path to server.id used to set the initial password |
+| `DomSrvGuardSetup=1` | initial setup only | Triggers initial password set for a passwordless server.id — cleared automatically |
+| `DomSrvGuardDebug=1` | optional | Enable verbose logging to the Domino console |
+
+### Keyring payload
+
+srvguard writes a JSON object to the kernel keyring under the label `srvguard`.
+domsrvguard reads the following fields:
+
+| Field | Description |
+|---|---|
+| `password` | Current server.id password |
+| `new_password` | New password for rollover — triggers `SECKFMChangePassword` on next unlock |
+
+### Three scenarios
+
+**Normal unlock** — server.id already has a password:
+```json
+{"password":"DontPanic"}
 ```
 
-No Vault code, no token handling, no certificate management in the EM. srvguard
-handles all of that. The EM just reads one field and zeros the buffer.
+**Initial setup** — server.id has no password yet. Set `DomSrvGuardSetup=1`
+and `KeyFilename` in notes.ini before starting Domino. `MainEntryPoint` sets
+the password via `SECKFMChangePassword`, then `EM_GETPASSWORD` fires to unlock
+the server. `DomSrvGuardSetup` is cleared automatically.
+```json
+{"password":"FortyTwo"}
+```
 
-## Next step
+**Password rollover** — rotate to a new password. Both fields present triggers
+`SECKFMChangePassword` inside `EM_GETPASSWORD`. The server unlocks with the new
+password. On next restart provision only `password` with the new value.
+```json
+{"password":"DontPanic","new_password":"FortyTwo"}
+```
 
-Once Pattern 1 works in your environment, switching to Vault (Pattern 2)
-requires only a change to the srvguard configuration — no application code
-changes. The keyring API and the consumer binary stay identical.
-
-See [`docs/architecture.md`](../../docs/architecture.md) for the full picture.
+See `demo-domino.sh` for ready-to-run examples of all three scenarios.

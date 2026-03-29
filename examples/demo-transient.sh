@@ -13,10 +13,10 @@ set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 UNIT_NAME="srvguard-demo"
-SRVGUARD_BIN="${SRVGUARD_BIN:-/bin/srvguard}"
-CRED_FILE="${CRED_FILE:-/tmp/${CRED_NAME}}"
 CRED_NAME="vault-token"
+CRED_FILE="${CRED_FILE:-/tmp/${CRED_NAME}}"
 OUTPUT_DIR="/run/srvguard-demo/secrets"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -24,6 +24,17 @@ OUTPUT_DIR="/run/srvguard-demo/secrets"
 log()  { echo "  $*"; }
 info() { echo; echo "── $* ──"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
+
+# Locate srvguard: project bin/ → system /bin → PATH
+if [ -x "${SCRIPT_DIR}/../bin/srvguard" ]; then
+    SRVGUARD_BIN="$(realpath "${SCRIPT_DIR}/../bin/srvguard")"
+elif [ -x "/bin/srvguard" ]; then
+    SRVGUARD_BIN="$(realpath "/bin/srvguard")"
+elif command -v srvguard &>/dev/null; then
+    SRVGUARD_BIN="$(realpath "$(command -v srvguard)")"
+else
+    die "srvguard binary not found — run ./compile.sh -docker from the project root"
+fi
 
 ask() {
     local prompt="$1" default="${2:-}" var
@@ -72,7 +83,6 @@ require systemd-creds "install systemd (v250+)"
 require systemd-run   "install systemd (v250+)"
 require systemctl     "install systemd"
 
-[[ -x "$SRVGUARD_BIN" ]] || die "$SRVGUARD_BIN not found — export SRVGUARD_BIN=/path/to/srvguard"
 log "srvguard binary: $SRVGUARD_BIN"
 
 SYSTEMD_VER=$(systemctl --version | awk 'NR==1{print $2}')

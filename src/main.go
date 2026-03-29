@@ -54,9 +54,8 @@ type Config struct {
     SecretType  string // tls, rsa, ecdsa
 
     // Output
-    Mode         OutputMode
-    OutputDir    string // for files mode: directory to write cert/key/password
-    KeyringLabel string // for keyring mode: label for the kernel key
+    Mode      OutputMode
+    OutputDir string // for files mode: directory to write cert/key/password
 
     // Template processing
     TemplateSrc string // path to config template (e.g. nginx.conf.template)
@@ -100,9 +99,8 @@ func loadConfig() (*Config, error) {
         SecretFQDN:      os.Getenv("SRVGUARD_SECRET_FQDN"),
         SecretType:      envOrDefault("SRVGUARD_SECRET_TYPE", "tls"),
         SecretPath:      os.Getenv("SRVGUARD_SECRET_PATH"),
-        Mode:            OutputMode(envOrDefault("SRVGUARD_OUTPUT_MODE", string(OutputFiles))),
-        OutputDir:       envOrDefault("SRVGUARD_OUTPUT_DIR", "/run/srvguard/certs"),
-        KeyringLabel:    envOrDefault("SRVGUARD_KEYRING_LABEL", "srvguard"),
+        Mode:      OutputMode(envOrDefault("SRVGUARD_OUTPUT_MODE", string(OutputFiles))),
+        OutputDir: envOrDefault("SRVGUARD_OUTPUT_DIR", "/run/srvguard/certs"),
         TemplateSrc:     os.Getenv("SRVGUARD_TEMPLATE_SRC"),
         TemplateDst:     os.Getenv("SRVGUARD_TEMPLATE_DST"),
         PollInterval:    envDuration("SRVGUARD_POLL_INTERVAL", 60*time.Second),
@@ -350,10 +348,10 @@ func writeToFiles(data map[string]string, dir string) error {
     return nil
 }
 
-// writeToKeyring stores a single secret value in the Linux kernel keyring.
-// Implemented in keyring.go — stub here for other platforms.
-func writeToKeyring(label string, data map[string]string) error {
-    return keyringWrite(label, data)
+// writeToKeyring stores secrets in the Linux kernel keyring.
+// The label is derived internally — see keyring.go.
+func writeToKeyring(data map[string]string) error {
+    return keyringWrite(data)
 }
 
 // -----------------------------------------------------------------------------
@@ -453,7 +451,6 @@ var varDefs = []varDef{
     {"SRVGUARD_SECRET_PATH", "", "Full KV v2 path override  e.g. secret/data/certs/myserver/tls"},
     {"SRVGUARD_OUTPUT_MODE", "files", "Output backend: files or keyring"},
     {"SRVGUARD_OUTPUT_DIR", "/run/srvguard/certs", "Output directory (files mode)  e.g. /run/certs"},
-    {"SRVGUARD_KEYRING_LABEL", "srvguard", "Kernel keyring label  e.g. myapp-tls"},
     {"SRVGUARD_TEMPLATE_SRC", "", "Config template  e.g. /etc/nginx/nginx.conf.template"},
     {"SRVGUARD_TEMPLATE_DST", "", "Rendered config  e.g. /etc/nginx/nginx.conf"},
     {"SRVGUARD_LOG_LEVEL", "info", "Log verbosity: none | error | info | verbose | debug"},
@@ -471,6 +468,8 @@ var varDefs = []varDef{
     {"SRVGUARD_MAIL_STARTTLS", "opportunistic", "STARTTLS mode: required | opportunistic (default) | off"},
     {"SRVGUARD_MAIL_TLS_SKIP_VERIFY", "false", "Skip TLS certificate verification (test/lab only)"},
     {"SRVGUARD_MAIL_STARTUP",         "false", "Send configuration report by mail at startup (async)"},
+    // Admin commands
+    {"SRVGUARD_CRED_FILE", "/etc/srvguard/vault-token.cred", "Credential file path for --bootstrap / --rotate (systemd auth)"},
 }
 
 // effective returns the env var value or the default if not set.
@@ -502,7 +501,9 @@ func truncCol(s string, n int) string {
 // printHelp prints the full help table with default, effective value and description.
 func printHelp() {
     printBanner()
-    fmt.Printf("Usage: srvguard [--version] [--help] [--test-mail] [-- <command> [args...]]\n\n")
+    fmt.Printf("Usage: srvguard [--version] [--help] [--bootstrap [path]] [--rotate [path]] [--test-mail] [-- <command> [args...]]\n\n")
+    fmt.Printf("  --bootstrap [path]   create or replace a systemd encrypted credential file\n")
+    fmt.Printf("  --rotate    [path]   atomically replace a credential file with in-memory rollback\n")
     fmt.Printf("  --test-mail [addr]   send configuration report to SRVGUARD_MAIL_TO (or addr if given)\n\n")
     fmt.Printf("%-30s  %-25s  %-25s  %s\n", "Variable", "Default", "Effective", "Description / Example")
     fmt.Printf("%s\n", strings.Repeat("-", 160))
@@ -534,7 +535,7 @@ func dumpConfig() {
 // -----------------------------------------------------------------------------
 
 func main() {
-    // handle --version, --help and --test-mail before anything else
+    // handle --version, --help, --bootstrap, --rotate and --test-mail before anything else
     for _, arg := range os.Args[1:] {
         switch arg {
         case "--version", "-v":
@@ -542,6 +543,32 @@ func main() {
             return
         case "--help", "-h":
             printHelp()
+            return
+        case "--bootstrap":
+            var path string
+            args := os.Args[1:]
+            for i, a := range args {
+                if a == "--bootstrap" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+                    path = args[i+1]
+                }
+            }
+            if err := runBootstrap(path); err != nil {
+                fmt.Fprintf(os.Stderr, "srvguard: bootstrap: %v\n", err)
+                os.Exit(1)
+            }
+            return
+        case "--rotate":
+            var path string
+            args := os.Args[1:]
+            for i, a := range args {
+                if a == "--rotate" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+                    path = args[i+1]
+                }
+            }
+            if err := runRotate(path); err != nil {
+                fmt.Fprintf(os.Stderr, "srvguard: rotate: %v\n", err)
+                os.Exit(1)
+            }
             return
         case "--test-mail":
             // optional next argument is a recipient address override
@@ -733,7 +760,7 @@ func writeSecrets(cfg *Config, data map[string]string) error {
     case OutputFiles:
         return writeToFiles(data, cfg.OutputDir)
     case OutputKeyring:
-        return writeToKeyring(cfg.KeyringLabel, data)
+        return writeToKeyring(data)
     default:
         return fmt.Errorf("unknown output mode: %s", cfg.Mode)
     }

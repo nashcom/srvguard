@@ -56,10 +56,18 @@ build_target()
 {
     local arch="$1"
     local out="$2"
+    local ldflags="-s -w"
+
+    # Inject shared secret at build time when SRVGUARD_BUILD_SALT is set.
+    # Both srvguard (Go) and domsrvguard (C++) must be built with the same value.
+    # Generate a value: od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+    if [ -n "${SRVGUARD_BUILD_SALT:-}" ]; then
+        ldflags="${ldflags} -X 'main.keyringBuildSalt=${SRVGUARD_BUILD_SALT}'"
+    fi
 
     printf "Building %s ...\n" "${out}"
     ( cd "${SRC_DIR}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-        go build -buildvcs=false -ldflags="-s -w" -o "${out}" . )
+        go build -buildvcs=false -ldflags="${ldflags}" -o "${out}" . )
 }
 
 if $OPT_ALL; then

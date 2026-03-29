@@ -1,5 +1,12 @@
 # srvguard
 
+> [!NOTE]
+> **Early adopter preview — work in progress.**
+> This project is publicly available to gather feedback during the design phase.
+> The architecture and APIs are still evolving and are not yet ready for production use.
+> If you are evaluating srvguard or have thoughts to share, please open a GitHub Discussion —
+> we are keen to hear from early adopters. Pull requests are not being accepted at this stage.
+
 **Nash!Com Service Guard** — a universal service launcher and secret manager
 for secure, automated secret delivery to any workload.
 
@@ -53,12 +60,18 @@ on certificate lifetimes and the Domino ecosystem is in
 distribution platform. One well-tested combination is
 [HashiCorp Vault](https://www.vaultproject.io/) as the central secret store
 together with
-[HCL Domino CertMgr](https://help.hcl-software.com/domino/14.5.1/admin/secu_certmgr_overview.html)
-as the certificate lifecycle component. CertMgr supports ACME flows with
-public and commercial CAs (Let's Encrypt, DigiCert, Sectigo, Actalis and
-others), handles key generation and rollover, and automates renewal. It can
-push issued certificates and keys into Vault, from where `srvguard` delivers
-them to whatever process needs them.
+[HCL Domino CertMgr](https://opensource.hcltechsw.com/domino-cert-manager/)
+([docs](https://help.hcl-software.com/domino/14.5.1/admin/certificate_management_with_certmgr.html))
+as the certificate lifecycle component. CertMgr owns the full TLS certificate
+lifecycle — ACME flows with public and commercial CAs (Let's Encrypt, DigiCert,
+Sectigo, Actalis and others), key generation and rollover, and automated
+renewal. It can push issued certificates and keys into Vault, from where
+`srvguard` delivers them to whatever process needs them.
+
+For Domino specifically, CertMgr handles all TLS certificate management
+natively. `srvguard`'s role in the Domino world is delivering non-certificate
+secrets — `server.id` passwords, API keys — via the kernel keyring to the
+Domino Extension Manager. The two tools are complementary, not overlapping.
 
 Other combinations work too — Vault's own PKI engine, an external ACME client
 like `acme.sh`, or a plain file drop from any provisioning tool. `srvguard`
@@ -240,11 +253,13 @@ standard convention does not apply:
 
 ### Output
 
-| Variable                 | Default               | Description                          |
-|--------------------------|-----------------------|--------------------------------------|
-| `SRVGUARD_OUTPUT_MODE`   | `files`               | Output backend: `files` or `keyring` |
-| `SRVGUARD_OUTPUT_DIR`    | `/run/srvguard/certs` | Directory for the `files` backend    |
-| `SRVGUARD_KEYRING_LABEL` | `srvguard`            | Key label for the `keyring` backend  |
+| Variable               | Default               | Description                          |
+|------------------------|-----------------------|--------------------------------------|
+| `SRVGUARD_OUTPUT_MODE` | `files`               | Output backend: `files` or `keyring` |
+| `SRVGUARD_OUTPUT_DIR`  | `/run/srvguard/certs` | Directory for the `files` backend    |
+
+The keyring label is derived automatically from the build salt, the external secret
+file, and the current boot ID — see [Keyring label derivation and build salt](#keyring-label-derivation-and-build-salt).
 
 ### Config Template Processing
 
@@ -384,14 +399,14 @@ See `docker-compose.yml` for a complete working model. Key points:
 ```bash
 export SRVGUARD_SECRET_PATH=secret/data/domino/server01.example.com/id
 export SRVGUARD_OUTPUT_MODE=keyring
-export SRVGUARD_KEYRING_LABEL=srvguard
 
 srvguard -- /opt/hcl/domino/bin/server
 ```
 
-The Domino Extension Manager hook calls `SrvGuardKeyringRead()` at startup
-to retrieve the `server.id` password. The key is revoked immediately after
-the first read — it cannot be read again.
+The Domino Extension Manager hook calls `SrvGuardDeriveKeyLabel()` at startup
+to derive the opaque keyring label, then `SrvGuardKeyringRead()` to retrieve
+the `server.id` password. The key is revoked immediately after the first read
+— it cannot be read again.
 
 ### Secret-only mode
 
@@ -417,9 +432,22 @@ dependency, no curl, no external libraries required.
 ```cpp
 #include "srvguard.hpp"
 
+// Derive the keyring label from build_salt || external_secret || boot_id.
+// Must be called before SrvGuardKeyringRead / SrvGuardKeyringPeek.
+// pszLabel must be at least 33 bytes.  Returns false if the external secret
+// file cannot be read.
+bool SrvGuardDeriveKeyLabel (char *pszLabel, size_t nLabelLen);
+
 // Read a named field from the kernel keyring.
 // The key is revoked immediately after reading — one-time use.
 bool SrvGuardKeyringRead (const char *pszLabel,
+                          const char *pszField,
+                          char       *pszValue,
+                          size_t      nMaxLen);
+
+// Read a named field WITHOUT revoking the key.
+// Use when the same key will be consumed again in a later call.
+bool SrvGuardKeyringPeek (const char *pszLabel,
                           const char *pszField,
                           char       *pszValue,
                           size_t      nMaxLen);
@@ -440,13 +468,46 @@ void SrvGuardZero (void *pBuf, size_t nLen);
 ```cpp
 #include "srvguard.hpp"
 
+static char g_szKeyringLabel[33] = {0};
+
+// Called once at extension manager initialisation.
+// Derives the keyring label and — if SRVGUARD_PW_SETUP is set —
+// sets the initial password on a passwordless server.id.
+STATUS MainEntryPoint (void)
+{
+    char szIDFile[MAXPATH]   = {0};
+    char szPassword[512]     = {0};
+    STATUS err               = NOERROR;
+
+    if (!SrvGuardDeriveKeyLabel (g_szKeyringLabel, sizeof (g_szKeyringLabel)))
+    {
+        printf ("srvguard: cannot derive keyring label\n");
+        return ERR_MISC_INVALID_ARGS;
+    }
+
+    // initial setup — only when the ID has no password yet
+    if (OSGetEnvironmentLong ("SRVGUARD_PW_SETUP"))
+    {
+        if (OSGetEnvironmentString ("KeyFilename", szIDFile, sizeof (szIDFile)) &&
+            SrvGuardKeyringPeek (g_szKeyringLabel, "password", szPassword, sizeof (szPassword)))
+        {
+            err = SECKFMChangePassword (szIDFile, NULL, szPassword);
+            if (!err)
+                OSSetEnvironmentInt ("SRVGUARD_PW_SETUP", 0);
+        }
+        SrvGuardZero (szPassword, sizeof (szPassword));
+    }
+
+    return NOERROR;
+}
+
 // Called by Extension Manager before server.id is opened.
 // No Domino C-API calls are safe at this stage — pure C only.
 STATUS LNPUBLIC PasswordCallback (/* EM args */)
 {
-    char szPassword[512] = {};
+    char szPassword[512] = {0};
 
-    if (!SrvGuardKeyringRead ("srvguard", "password",
+    if (!SrvGuardKeyringRead (g_szKeyringLabel, "password",
                                szPassword, sizeof (szPassword)))
         return ERR_EM_CONTINUE; // key not found — let Domino prompt
 
@@ -465,6 +526,47 @@ make
 ```
 
 Produces `libsrvguard.a` for static linking into any native application.
+
+## Keyring label derivation and build salt
+
+The Linux kernel keyring key is stored under a derived label rather than a
+fixed string like `"srvguard"`.  The label is computed at runtime as:
+
+```
+label = hex( SHA256( build_salt || external_secret || boot_id ) )[:32]
+```
+
+**build_salt** — a 64-character hex string (32 bytes) baked into both the
+`srvguard` binary and the `domsrvguard` consumer library at compile time.
+It differentiates this deployment from any other build of srvguard.  It is
+not a secret by itself — an attacker who extracts it from a binary still
+cannot derive the label without the external secret.  The default value
+shipped in the repository is freshly generated and is fine to use as-is.
+To use a deployment-specific value, set `SRVGUARD_BUILD_SALT` at build time:
+
+```bash
+export SRVGUARD_BUILD_SALT=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+./compile.sh                                                    # srvguard binary
+make SRVGUARD_BUILD_SALT=$SRVGUARD_BUILD_SALT -C consumers/cpp  # C++ library
+```
+
+Both commands must receive the **same value** — they are two halves of the
+same trust anchor.
+
+**external_secret** — 32 random bytes written to
+`/var/lib/srvguard/keyring.secret` (mode 0400, owned by the service user)
+by srvguard on first run.  This file never enters source control.  It is the
+deployment-unique component that makes the label unguessable even if the
+build salt is known.  Override the path with `SRVGUARD_KEYRING_SECRET_FILE`
+for testing (the demo uses `/tmp/srvguard-keyring.secret`).
+
+**boot_id** — `/proc/sys/kernel/random/boot_id`, a UUID that changes on every
+reboot.  This ensures the label is different each time the machine starts,
+so a key captured from a previous boot cannot be replayed.
+
+The result is a 32-character opaque hex label that an attacker cannot predict
+without access to both the binary (build salt) and the secret file, and even
+then only for the current boot session.
 
 ## Building srvguard
 
@@ -523,9 +625,12 @@ used by [nsh-vault-deploy](https://github.com/nashcom/nsh-vault-deploy) are:
 - **File credentials** (`role_id`, `secret_id`) are read from files at
   `/etc/srvguard/`, not from environment variables, to prevent exposure
   via `/proc/<pid>/environ`.
-- **Kernel keyring** backend stores secrets in the Linux session keyring.
+- **Kernel keyring** backend stores secrets in the Linux user keyring
+  (`KEY_SPEC_USER_KEYRING`), shared across all processes of the same UID.
   Keys are revoked on first read and exist only in kernel memory — never
-  on disk or in the filesystem.
+  on disk or in the filesystem.  The key label is derived from a build salt,
+  a machine-local secret file, and the current boot ID — it changes every
+  reboot and is not guessable without both inputs.
   → [Linux Kernel Keyring](docs/linux-kernel-keyring.md)
 - **systemd credentials** are decrypted by the service manager using TPM2 or
   a machine-bound key before srvguard starts. The plaintext lives in
@@ -548,3 +653,90 @@ used by [nsh-vault-deploy](https://github.com/nashcom/nsh-vault-deploy) are:
 
 See [Secret Distribution Across Platforms](docs/architecture.md) for the full
 runtime identity model covering VMs, containers, and Kubernetes.
+
+## Credential Lifecycle
+
+This section covers the full lifecycle of the systemd encrypted credential
+file used by `SRVGUARD_AUTH_METHOD=systemd` — from first-time setup through
+normal operation and eventual rotation.
+
+### Bootstrap — first-time setup
+
+Before the service can start, create the encrypted credential file:
+
+```bash
+srvguard --bootstrap [/path/to/vault-token.cred]
+```
+
+The command:
+1. Prompts for the initial credential value (e.g. a Vault token), with echo suppressed
+2. Encrypts it via `systemd-creds encrypt` — the result is protected by TPM2 (if
+   available) or a machine-derived key and is unreadable on any other machine
+3. Writes the encrypted file to `SRVGUARD_CRED_FILE` (default
+   `/etc/srvguard/vault-token.cred`)
+4. Prints the `LoadCredentialEncrypted=` directive to add to the unit file
+
+The corresponding unit snippet:
+
+```ini
+[Service]
+LoadCredentialEncrypted=vault-token:/etc/srvguard/vault-token.cred
+Environment=SRVGUARD_AUTH_METHOD=systemd
+```
+
+### Normal operation
+
+At each service start, systemd decrypts the `.cred` file using TPM2 or the
+machine-derived key and writes the plaintext to a private tmpfs mount at
+`$CREDENTIALS_DIRECTORY/vault-token`.  This directory is visible only to
+processes in the service's own mount namespace — other services, including
+the Domino server, cannot see it.
+
+srvguard then:
+1. Reads the plaintext credential from `$CREDENTIALS_DIRECTORY`
+2. Authenticates to Vault and fetches secrets
+3. Writes secrets to the configured output backend (keyring or files)
+4. Starts and supervises the child process
+
+Once srvguard has written secrets to the keyring and started the child process,
+the credential file is no longer accessed.  The plaintext credential exists only
+transiently in the service's private tmpfs namespace.
+
+### Rotation
+
+When a Vault token expires or the credential needs to be replaced:
+
+```bash
+srvguard --rotate [/path/to/vault-token.cred]
+```
+
+The command uses a **two-phase commit with in-memory rollback**:
+
+| Step | Action |
+|------|--------|
+| 1. Read | Load current encrypted bytes from `.cred` into memory — this is the rollback copy |
+| 2. Verify | Decrypt the current file to confirm this machine can read it before making changes |
+| 3. Encrypt | Prompt for new value; run `systemd-creds encrypt` to `.cred.new` (temp file) |
+| 4. Commit | Atomic `rename(.cred.new, .cred)` — both paths are on the same filesystem |
+| 5. Apply | Restart the service: `systemctl restart <unit>` |
+
+If the rename fails at step 4, the old encrypted bytes are written back from
+memory — the original `.cred` is restored exactly as it was.  The rollback is
+cost-free: reading the current credential is an inherent first step of any
+rotation, so both old and new state are already in memory when the commit is
+attempted.
+
+The service continues running on the old credential until step 5 — there is
+no window where neither credential is valid.  If the restart fails for an
+unrelated reason, running `--rotate` again replaces the already-committed new
+credential.
+
+### Security properties of the .cred file
+
+| Property | Details |
+|----------|---------|
+| At rest | Encrypted by TPM2 (if available) or machine-derived key — unreadable on another host |
+| In service namespace | Decrypted by systemd to `$CREDENTIALS_DIRECTORY` (private tmpfs); inaccessible to other services |
+| After srvguard starts | Vault token is consumed; secrets live only in the kernel keyring or a separate tmpfs |
+| Root access | A root process can use `nsenter --mount` to access the service tmpfs, or read the `.cred` file from disk — the `.cred` file cannot be decrypted without TPM or matching machine-id |
+| Cross-service visibility | The `.cred` file never appears in the Domino process namespace — srvguard runs as a separate oneshot service and delivers secrets via the user keyring instead |

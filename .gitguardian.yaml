@@ -1,0 +1,19 @@
+version: 2
+
+# ── Ignored paths ─────────────────────────────────────────────────────────────
+# Demo and documentation files that contain intentional example values.
+# These are fictional passwords used in test scripts and documentation only.
+
+ignored-paths:
+  - consumers/cpp/demo-domino.sh  # demo script — uses fictional Hitchhiker's Guide passwords
+  - consumers/cpp/README.md       # documentation examples only
+
+# ── Ignored matches ───────────────────────────────────────────────────────────
+# The build salt is a compile-time differentiation value, not a credential.
+# See README section "Keyring label derivation and build salt" for background.
+# It adds one layer to a multi-layer label derivation scheme; by itself it
+# protects nothing and is intentionally shipped in source.
+
+ignored-matches:
+  - name: "Keyring build salt — compile-time differentiator, not a credential"
+    match: "162b6cceee498c4e1b9ac4418c4edd503eb5000e0db5c5a0a853a1f5d0f90181"

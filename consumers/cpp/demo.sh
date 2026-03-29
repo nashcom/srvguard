@@ -27,6 +27,10 @@ CRED_NAME="key_password"          # must match SrvGuardKeyringRead field in exam
 CRED_FILE="/tmp/${CRED_NAME}"
 EXAMPLE_BIN="${SCRIPT_DIR}/example"
 
+# Demo uses /tmp for the keyring secret — no system dependencies, no sudo.
+# Production default is /var/lib/srvguard/keyring.secret (created by srvguard).
+KEYRING_SECRET_FILE="/tmp/srvguard-keyring.secret"
+
 log()  { echo "  $*"; }
 info() { echo; echo "── $* ──"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -50,6 +54,8 @@ if [ "${1:-}" = "--clean" ]; then
     systemctl reset-failed "${UNIT_NAME}.service" 2>/dev/null || true
     rm -f "$CRED_FILE"
     log "removed $CRED_FILE"
+    rm -f "$KEYRING_SECRET_FILE"
+    log "removed $KEYRING_SECRET_FILE"
     echo; echo "Clean."; exit 0
 fi
 
@@ -109,16 +115,22 @@ unset TEST_SECRET VERIFY
 info "Launching transient service: ${UNIT_NAME}.service"
 
 echo
+echo "  Files visible to the admin:"
+echo "    encrypted credential:  $CRED_FILE"
+echo "    keyring secret:        $KEYRING_SECRET_FILE  (32 random bytes, created by srvguard)"
+echo
 echo "  Chain:"
 echo "    systemd LoadCredentialEncrypted= → \$CREDENTIALS_DIRECTORY/$CRED_NAME"
-echo "    srvguard (local mode)            → kernel keyring {\"$CRED_NAME\":\"...\"}"
-echo "    example binary                   → SrvGuardKeyringRead → revoke → zero"
+echo "    srvguard (local mode)            → keyring secret + boot_id → derived label"
+echo "                                     → kernel keyring {\"$CRED_NAME\":\"...\"}"
+echo "    example binary                   → derive same label → SrvGuardKeyringRead → revoke → zero"
 echo
 
 systemctl is-active --quiet "${UNIT_NAME}.service" 2>/dev/null && \
     systemctl stop "${UNIT_NAME}.service"
 systemctl reset-failed "${UNIT_NAME}.service" 2>/dev/null || true
 
+SINCE=$(date -Iseconds)
 systemd-run \
     --unit="${UNIT_NAME}" \
     --service-type=oneshot \
@@ -126,14 +138,14 @@ systemd-run \
     --setenv=SRVGUARD_AUTH_METHOD=local \
     --setenv=SRVGUARD_SYSTEMD_CRED="${CRED_NAME}" \
     --setenv=SRVGUARD_OUTPUT_MODE=keyring \
-    --setenv=SRVGUARD_KEYRING_LABEL=srvguard \
+    --setenv=SRVGUARD_KEYRING_SECRET_FILE="${KEYRING_SECRET_FILE}" \
     "$SRVGUARD_BIN" -- "$EXAMPLE_BIN"
 
 # ── Result ────────────────────────────────────────────────────────────────────
 
 info "Result"
 sleep 1
-journalctl -u "${UNIT_NAME}.service" --no-pager -o cat | grep -v "^$"
+journalctl -u "${UNIT_NAME}.service" --no-pager -o cat --since "$SINCE" | grep -v "^$"
 
 echo
 echo "  Next step: demo-transient.sh — same flow with Vault in the middle"
