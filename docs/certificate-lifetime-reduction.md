@@ -22,14 +22,14 @@ major browser (Apple, Google, Microsoft, Mozilla) voting yes and not a single
 no vote among certificate issuers. The ballot introduces a phased reduction in
 maximum TLS certificate validity:
 
-```markdown
+
 | Date                 | Maximum Validity     |
 |:---------------------|:---------------------|
 | ~~Until 2026-03-15~~ | ~~398 days~~         |
 | **Now**              | **200 days**         |
 | 2027-03-15           | 100 days             |
 | **2029-03-15**       | **47 days**          |
-```
+
 
 The 47-day figure is not arbitrary — it corresponds to a 30-day renewal cycle
 with a 17-day buffer. By 2029, if your infrastructure cannot automatically
@@ -39,7 +39,6 @@ renew and deploy certificates every month, it will break.
 it is already here. Certificates issued with more than 200-day validity are
 no longer trusted by major browsers.
 
----
 
 ## This Has Been Building for a Long Time
 
@@ -58,7 +57,6 @@ low as 6 days) today for environments that have fully automated renewal.
 The message from every major browser and CA is the same: **manual certificate
 management is over. Automation is no longer a best practice — it is a requirement.**
 
----
 
 ## Renewal Is Not Enough — Keys Must Rotate Too
 
@@ -91,7 +89,6 @@ This is operationally more demanding. A new key means:
 At 47-day cycles, this happens roughly every six weeks — automatically and
 reliably for every server in your infrastructure.
 
----
 
 ## What Domino CertMgr Already Does
 
@@ -133,7 +130,6 @@ separate database and also push exportable TLS credentials to:
 * Kubernetes secrets
 * Other targets in the future
 
----
 
 ## The Gap: Externally Deployed Certificates
 
@@ -158,7 +154,6 @@ What is needed is a distribution layer that:
 * Triggers automatic reload when new TLS keys and certificates arrive
 * Scales to frequent rotation without manual intervention
 
----
 
 ## HashiCorp Vault as a Distribution Layer
 
@@ -181,7 +176,6 @@ The security properties align well with shorter lifetimes:
 * Vault’s audit log provides a full record of every access
 * A server compromise exposes only what was in memory at that moment
 
----
 
 ## The Timeline for Action
 
@@ -198,7 +192,6 @@ This is not a future problem — it is already underway. The next step —
 build and validate the automation. By the time 47-day certificates arrive in
 2029, the operational patterns need to be routine, not experimental.
 
----
 
 ## What I Am Building at Nash!Com
 
@@ -219,7 +212,6 @@ the full certificate distribution requirement: short-lived certificates,
 fresh keys on every cycle, and secure distribution to every endpoint —
 without manual intervention.
 
----
 
 ### Once the Vault Infrastructure Is in Place
 
@@ -240,7 +232,6 @@ administrator gets full audit logging of every access via Vault.
 
 Two problems, one infrastructure investment.
 
----
 
 ### Automating Commercial CAs
 
@@ -251,7 +242,7 @@ which ties an ACME client to an existing commercial CA account. Some also offer
 a free tier: Let's Encrypt offers free certificates but only supports domain
 validation certificates.
 
-```markdown
+
 | CA            | ACME + EAB            | Certificate Type         | Tested with Domino |
 |:--------------|:----------------------|:-------------------------|:-------------------|
 | Let's Encrypt | Yes (no EAB required) | Free                     | Yes                |
@@ -262,7 +253,7 @@ validation certificates.
 | DigiCert      | Yes — DV, OV, EV      | Commercial               | No                 |
 | GlobalSign    | Yes                   | Commercial               | No                 |
 | GoDaddy       | Yes                   | Commercial               | No                 |
-```
+
 
 Commercial CAs typically require EAB credentials and an active account.
 Testing commercial providers is often limited because:
@@ -286,7 +277,6 @@ ACME endpoints and EAB credentials. And with SC-081 making manual renewal
 unworkable at 47-day cycles, this list will only grow as remaining holdouts
 add ACME support to stay relevant.
 
----
 
 ## srvguard — The Last Mile
 
