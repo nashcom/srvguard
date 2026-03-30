@@ -53,15 +53,13 @@ by February 2028 — and they already offer **6-day certificates** today for
 environments that have fully automated renewal.
 
 The message from every major browser and CA is the same: manual certificate
-management is over. Automation is no longer a best practice, it is a
-requirement.
+management is over. Automation is no longer a best practice, it is a requirement.
 
 
 ## Renewal Is Not Enough — Keys Must Rotate Too
 
-Here is where most discussions stop short. Shorter certificate lifetimes
-limit how long a *certificate* is trusted — but they say nothing about the
-*private key* underneath it.
+Here is where most discussions stop short. Shorter certificate lifetimes limit how long a
+*certificate* is trusted — but they say nothing about the *private key* underneath it.
 
 Consider a typical pre-SC-081 deployment: a server running on the same private
 key for three years, renewed annually with new certificates over the same key.
@@ -82,7 +80,7 @@ in weeks, not years.
 This is more demanding operationally. A new key means:
 - A new CSR
 - A new certificate issuance (not just a renewal of the existing one)
-- Distribution of a new key and certificate to every endpoint that needs it
+- Distribution of a **new key** and certificate to every endpoint that needs it
 
 With 47-day cycles, this happens roughly every six weeks — automatically,
 reliably, for every server in your infrastructure.
@@ -90,9 +88,8 @@ reliably, for every server in your infrastructure.
 
 ## What CertStore Already Does
 
-HCL Domino's CertStore already handles key rollover correctly once it is
-requested. When a key rollover is initiated via ACME, CertMgr executes the
-full cycle cleanly:
+HCL Domino's CertStore already handles key rollover correctly once it is requested.
+When a key rollover is initiated via ACME, CertMgr executes the full cycle cleanly:
 
 1. Complete the ACME challenge (HTTP-01 or DNS-01) to prove domain control
 2. Generate a new private key (RSA or ECDSA) and CSR
@@ -101,13 +98,23 @@ full cycle cleanly:
 5. Archive the existing credentials document
 6. Optionally revoke the previous certificate
 
-The new key is only generated once the ACME authorization succeeds — there
-is no point creating a key until you know the certificate can be issued.
+The new key is only generated once the ACME authorization succeeds.
+There is no point creating a key until you know the certificate can be issued.
 The rollover mechanics are solid. What is not yet automated is the *triggering*
-of a new key on each renewal cycle — today that requires explicit action.
+of a **new key** on each renewal cycle — today that requires explicit action.
+
 Closing that gap, so that every renewal automatically produces a new key pair
 without manual intervention, is the next step. At 47-day cycles that step
-becomes mandatory.
+becomes mandatory. The key rollover option is reset after a certificate got renewed.
+It would be possible to write Lotus Script code to close that gap.
+
+Nash!Com is actively looking into the next steps and which additional
+functionality could be added with a Lotus Script agent.
+The agent could be in a separate database and also push exportable TLS Credentials to
+
+- HashiCorp Vault
+- Kubernetes secrets
+- other targes in future potentially
 
 
 ## The Gap: Externally Deployed Certificates
@@ -118,26 +125,27 @@ that need the same certificate. CertStore can manage the certificate lifecycle,
 but distributing the resulting key and certificate to external systems securely
 is a separate problem.
 
-The naive solution — copy the key file to a shared location — has obvious
-problems:
+The naive solution — copy the key file to a shared location — has obvious problems:
+
 - Private keys on shared filesystems are hard to protect
 - Rotation requires coordinating restarts across multiple servers
 - At 47-day intervals with key rotation, this becomes unsustainable manually
 - Every copy of the key on disk is another exposure surface
 
 What is needed is a distribution layer that:
+
 - Holds the key material securely in memory, not in plain files
 - Provides authenticated, audited access to each consuming server
-- Triggers automatic reload when new material arrives
+- Triggers automatic reload when new TLS keys and certs arrives
 - Scales to frequent rotation without manual intervention
 
 
-## HashiCorp Vault as the Distribution Layer
+## HashiCorp Vault as a Distribution Layer
 
-This is exactly the problem HashiCorp Vault solves. CertMgr (the Domino
-servertask that manages CertStore operations) pushes the certificate chain,
-encrypted private key, and key password to Vault immediately after issuance
-— entirely from memory, never writing the key to disk.
+This is exactly the problem HashiCorp Vault solves.
+CertMgr (the Domino servertask that manages CertStore operations) pushes
+the certificate chain, encrypted private key, and key password to Vault
+immediately after issuance — entirely from memory, never writing the key to disk.
 
 Each consuming server authenticates to Vault using AppRole credentials scoped
 to its own secret path. A lightweight fetcher process on the host retrieves
@@ -146,6 +154,7 @@ touches disk), and signals the application to reload. When the next renewal
 cycle runs, the same flow repeats automatically.
 
 The security properties align well with the shorter-lifetime model:
+
 - Each renewal produces a new key and a new set of Vault credentials
 - No key material ever sits in a plain file on any server
 - Vault's audit log provides a full record of every access
@@ -204,10 +213,10 @@ Two problems, one infrastructure investment.
 
 ### Automating Commercial CAs
 
-In parallel, I am looking at automating the full issuance flow with commercial
-CAs. The good news: the market has already converged on ACME as the automation
-standard. All major commercial CAs now support ACME with External Account
-Binding (EAB), which ties an ACME client to an existing commercial CA account:
+In parallel, I am looking at automating the full issuance flow with commercial CAs.
+The good news: the market has already converged on ACME as the automation standard.
+All major commercial CAs now support ACME with External Account Binding (EAB),
+which ties an ACME client to an existing commercial CA account:
 
 | CA | ACME + EAB |
 |---|---|
@@ -236,7 +245,7 @@ I will publish more details on both as the project progresses.
 ### srvguard — The Last Mile
 
 For services outside the Domino ecosystem — NGINX reverse proxies, load
-balancers, custom applications — I built `srvguard` as the delivery mechanism.
+balancers, custom applications — I working on `srvguard` as the delivery mechanism.
 
 `srvguard` is a small, statically compiled Go binary that runs as PID 1 in
 a container with no shell, no bash, and no external dependencies. It:
@@ -259,10 +268,9 @@ variables, gone after first use.
 
 ## Open Source
 
-All components described here are published as open source under the
-Apache 2.0 licence:
+All components described here are published as open source under the Apache 2.0 licence:
 
-- **[nashcom-certs-vault](https://github.com/nashcom/nashcom-certs-vault)** —
+- **[HashiCorp Vault Deployment project](https://github.com/nashcom/nsh-vault-deploy)** —
   HashiCorp Vault server configuration, Docker Compose stack, initialization
   scripts, policies, AppRole setup, and client examples including the C++
   push client used by CertMgr
@@ -271,8 +279,6 @@ Apache 2.0 licence:
   the universal service guard binary for Linux (amd64 + arm64), C++ consumer
   library for native applications including the Domino EM hook pattern, NGINX
   example configuration, and GitHub Actions build pipeline
-
-These are working, documented tools — not prototypes.
 
 Commercial services around implementation, integration with specific
 environments, and ongoing support are available through
